@@ -26,8 +26,9 @@ import time
 
 client = genai.Client(
     api_key=os.environ["GEMINI_API_KEY"],
-    http_options=types.HttpOptions(timeout=30000),  # 30-second max wait per attempt
+    http_options=types.HttpOptions(timeout=90000),  # 90-second wait so 3.8-flash finishes cleanly
 )
+
 
 prompt = """Create a twisty mental-math puzzle for 'Math Minute Marvels'.
 Rules:
@@ -49,7 +50,7 @@ Return JSON with these exact keys:
 - "solution_voice": spoken step-by-step reveal of the trick and final answer
 - "outro_voice": fast 3-second outro asking them to comment their time and subscribe"""
 
-models_to_try = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-3.8-flash"]
+models_to_try = ["gemini-3.8-flash", "gemini-3.5-flash-lite"]
 response = None
 
 for model_name in models_to_try:
