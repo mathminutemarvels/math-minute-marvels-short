@@ -129,6 +129,19 @@ def get_tick_clip():
 tick_sound = get_tick_clip()
 
 # 3. Build Clean Base Slides (1080x1920)
+import urllib.request
+
+# Auto-download bold font if font.ttf is not in the repo
+if not os.path.exists("font.ttf"):
+    try:
+        urllib.request.urlretrieve(
+            "https://github.com",
+            "font.ttf",
+        )
+    except Exception:
+        pass
+
+# 3. Build Clean Base Slides (1080x1920)
 def build_base_slide(output_name, badge, main_text, highlight="", badge_color="#FFD700"):
     if isinstance(main_text, list):
         main_text = "\n".join(str(item) for item in main_text)
@@ -142,23 +155,26 @@ def build_base_slide(output_name, badge, main_text, highlight="", badge_color="#
     W, H = img.size
 
     if os.path.exists("font.ttf"):
-        font_badge = ImageFont.truetype("font.ttf", 64)
-        font_body = ImageFont.truetype("font.ttf", 60)
-        font_hl = ImageFont.truetype("font.ttf", 80)
+        font_badge = ImageFont.truetype("font.ttf", 54)
+        font_body = ImageFont.truetype("font.ttf", 64)
+        font_hl = ImageFont.truetype("font.ttf", 82)
     else:
-        font_badge = ImageFont.load_default(size=58)
-        font_body = ImageFont.load_default(size=50)
-        font_hl = ImageFont.load_default(size=68)
+        font_badge = ImageFont.load_default(size=54)
+        font_body = ImageFont.load_default(size=64)
+        font_hl = ImageFont.load_default(size=82)
 
-    wrapped_badge = "\n".join(textwrap.wrap(badge, width=24))
-    draw.multiline_text((W / 2, 330), wrapped_badge, fill=badge_color, font=font_badge, anchor="ma", align="center", spacing=12)
+    # Moved down to y=430 so it never touches "MATH MINUTE MARVELS" in bg.png
+    wrapped_badge = "\n".join(textwrap.wrap(badge, width=26))
+    draw.multiline_text((W / 2, 430), wrapped_badge, fill=badge_color, font=font_badge, anchor="ma", align="center", spacing=12)
 
-    wrapped_body = "\n".join([textwrap.fill(line, width=25) for line in main_text.split("\n")])
-    draw.multiline_text((W / 2, 600), wrapped_body, fill="white", font=font_body, anchor="ma", align="center", spacing=22)
+    # Centered inside the grid box
+    wrapped_body = "\n".join([textwrap.fill(line, width=22) for line in main_text.split("\n")])
+    draw.multiline_text((W / 2, 650), wrapped_body, fill="white", font=font_body, anchor="ma", align="center", spacing=26)
 
+    # Highlight (Timer or Final Answer) at bottom of grid box
     if highlight:
         wrapped_hl = "\n".join(textwrap.wrap(highlight, width=20))
-        draw.multiline_text((W / 2, 1140), wrapped_hl, fill="#00FFCC", font=font_hl, anchor="ma", align="center", spacing=12)
+        draw.multiline_text((W / 2, 1180), wrapped_hl, fill="#00FFCC", font=font_hl, anchor="ma", align="center", spacing=14)
 
     img.save(output_name)
 
