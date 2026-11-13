@@ -1,6 +1,7 @@
 import os
 import json
 import time
+import math
 import asyncio
 import textwrap
 import numpy as np
@@ -10,7 +11,6 @@ import edge_tts
 from gtts import gTTS
 from PIL import Image, ImageDraw, ImageFont
 from moviepy import (
-    ImageClip,
     AudioFileClip,
     VideoClip,
     CompositeAudioClip,
@@ -36,7 +36,6 @@ Rules:
   * 30 = EASY (1-2 quick mental steps)
   * 45 = MEDIUM (2-3 mental steps)
   * 60 = HARD (3-4 mental steps)
-- Keep "steps_text" to strictly 3 short, punchy lines (max 8 words per line) so it fits cleanly on a phone screen.
 Return JSON with these exact keys:
 - "difficulty": "EASY", "MEDIUM", or "HARD"
 - "timer_seconds": 30, 45, or 60
@@ -45,8 +44,8 @@ Return JSON with these exact keys:
 - "intro_voice": energetic 3-second spoken challenge to stop scrolling
 - "question_text": clean, short text of the math riddle for screen
 - "question_voice": spoken reading of the riddle + telling them the exact seconds on the clock
-- "steps_text": 3 short lines explaining the step-by-step solution clearly
-- "answer_text": bold final answer (e.g., "Answer: 72")
+- "steps_text": 3-4 short lines explaining the step-by-step solution clearly
+- "answer_text": bold final answer
 - "solution_voice": spoken step-by-step reveal of the trick and final answer
 - "outro_voice": fast 3-second outro asking them to comment their time and subscribe"""
 
@@ -123,8 +122,8 @@ def get_tick_clip():
 
 tick_sound = get_tick_clip()
 
-# 3. Build Clean Base Slides (1080x1920) - Mobile Safe-Zone Aligned
-def build_base_slide(output_name, badge, main_text, highlight="", badge_color="#FFD700", compact=False):
+# 3. Build Clean Base Slides (1080x1920)
+def build_base_slide(output_name, badge, main_text, highlight="", badge_color="#FFD700"):
     if isinstance(main_text, list):
         main_text = "\n".join(str(item) for item in main_text)
     if isinstance(highlight, list):
@@ -140,40 +139,58 @@ def build_base_slide(output_name, badge, main_text, highlight="", badge_color="#
     if not os.path.exists(font_path):
         font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 
-    body_size = 46 if compact else 60
-    wrap_width = 28 if compact else 22
-    line_spacing = 16 if compact else 24
-
     if os.path.exists(font_path):
-        font_badge = ImageFont.truetype(font_path, 48)
-        font_body = ImageFont.truetype(font_path, body_size)
-        font_hl = ImageFont.truetype(font_path, 68)
+        font_badge = ImageFont.truetype(font_path, 54)
+        font_body = ImageFont.truetype(font_path, 64)
+        font_hl = ImageFont.truetype(font_path, 82)
     else:
-        font_badge = ImageFont.load_default(size=48)
-        font_body = ImageFont.load_default(size=body_size)
-        font_hl = ImageFont.load_default(size=68)
+        font_badge = ImageFont.load_default(size=54)
+        font_body = ImageFont.load_default(size=64)
+        font_hl = ImageFont.load_default(size=82)
 
-    # Positioned at y=515 so it sits cleanly below "MATH MINUTE MARVELS" in bg.png
     wrapped_badge = "\n".join(textwrap.wrap(badge, width=26))
-    draw.multiline_text((W / 2, 515), wrapped_badge, fill=badge_color, font=font_badge, anchor="ma", align="center", spacing=10)
+    draw.multiline_text((W / 2, 410), wrapped_badge, fill=badge_color, font=font_badge, anchor="ma", align="center", spacing=12)
 
-    # Positioned at y=650 inside the center grid box
-    wrapped_body = "\n".join([textwrap.fill(line, width=wrap_width) for line in main_text.split("\n")])
-    draw.multiline_text((W / 2, 650), wrapped_body, fill="white", font=font_body, anchor="ma", align="center", spacing=line_spacing)
+    wrapped_body = "\n".join([textwrap.fill(line, width=22) for line in main_text.split("\n")])
+    draw.multiline_text((W / 2, 620), wrapped_body, fill="white", font=font_body, anchor="ma", align="center", spacing=26)
 
-    # Positioned at y=1110 above the mascot and YouTube bottom overlay
     if highlight:
-        wrapped_hl = "\n".join(textwrap.wrap(highlight, width=18))
-        draw.multiline_text((W / 2, 1110), wrapped_hl, fill="#00FFCC", font=font_hl, anchor="ma", align="center", spacing=12)
+        wrapped_hl = "\n".join(textwrap.wrap(highlight, width=20))
+        draw.multiline_text((W / 2, 1150), wrapped_hl, fill="#00FFCC", font=font_hl, anchor="ma", align="center", spacing=14)
 
     img.save(output_name)
 
-# 4. Lip-Sync Character Overlay Engine (Positioned Above YouTube Bottom UI)
-char_closed = Image.open("char_closed.png").convert("RGBA").resize((420, 420))
-char_open = Image.open("char_open.png").convert("RGBA").resize((420, 420))
-char_think = Image.open("char_think.png").convert("RGBA").resize((420, 420)) if os.path.exists("char_think.png") else char_closed
+# 4. 5-Pose Smooth Lip-Sync, Blinking & Floating Character Engine
+def load_pose(filename, fallback_img=None):
+    if os.path.exists(filename):
+        return Image.open(filename).convert("RGBA").resize((460, 460), Image.Resampling.LANCZOS)
+    return fallback_img
 
-def make_talking_scene(slide_path, audio_path):
+char_closed = load_pose("char_closed.png")
+if char_closed is None:
+    raise FileNotFoundError("Missing char_closed.png in the repository root!")
+
+char_open = load_pose("char_open.png", char_closed)
+char_half = load_pose("char_half.png", char_open)
+char_think = load_pose("char_think.png", char_closed)
+char_blink = load_pose("char_blink.png", char_closed)
+
+def is_blinking(t):
+    cycle = t % 3.4
+    return 3.15 <= cycle <= 3.30
+
+def apply_squash_stretch(sprite, stretch_factor):
+    if abs(stretch_factor - 1.0) < 0.002:
+        return sprite, 0, 0
+    w, h = sprite.size
+    new_w = int(w / math.sqrt(stretch_factor))
+    new_h = int(h * stretch_factor)
+    resized = sprite.resize((new_w, new_h), Image.Resampling.BILINEAR)
+    dx = (w - new_w) // 2
+    dy = h - new_h
+    return resized, dx, dy
+
+def make_talking_scene(slide_path, audio_path, time_offset=0.0):
     base_img = Image.open(slide_path).convert("RGBA")
     audio = AudioFileClip(audio_path)
     fps = 24
@@ -182,48 +199,91 @@ def make_talking_scene(slide_path, audio_path):
     if samples.ndim > 1:
         samples = samples.mean(axis=1)
     samples = np.abs(samples)
-    threshold = np.percentile(samples, 55) if len(samples) > 0 else 0.02
+    window = np.ones(1900) / 1900
+    smoothed = np.convolve(samples, window, mode="same") if len(samples) > 0 else samples
+
+    active = smoothed[smoothed > 0.005]
+    if len(active) > 0:
+        low_thresh = float(np.percentile(active, 25))
+        high_thresh = float(np.percentile(active, 62))
+    else:
+        low_thresh, high_thresh = 0.012, 0.030
 
     def frame_func(t):
-        idx = int(t * 22050)
-        chunk = samples[idx : idx + 900]
-        is_talking = (np.mean(chunk) > threshold) if len(chunk) > 0 else False
+        global_t = t + time_offset
+        idx = min(int(t * 22050), max(0, len(smoothed) - 1))
+        vol = float(smoothed[idx]) if len(smoothed) > 0 else 0.0
+
+        if vol >= high_thresh:
+            sprite = char_open
+            stretch = 1.025
+        elif vol >= low_thresh:
+            sprite = char_half
+            stretch = 1.012
+        else:
+            sprite = char_blink if is_blinking(global_t) else char_closed
+            stretch = 1.0
+
+        bob_y = math.sin(global_t * 4.2) * 8.0
+        styled_sprite, dx, dy = apply_squash_stretch(sprite, stretch)
+        x_pos = int(520 + dx)
+        y_pos = int(1378 + bob_y + dy)
 
         frame = base_img.copy()
-        sprite = char_open if is_talking else char_closed
-        y_offset = 1230 if is_talking else 1240
-        frame.paste(sprite, (510, y_offset), sprite)
+        frame.paste(styled_sprite, (x_pos, y_pos), styled_sprite)
         return np.array(frame.convert("RGB"))
 
     return VideoClip(frame_func, duration=audio.duration).with_audio(audio).with_fps(fps)
 
-def make_thinking_scene(slide_path, duration=1.0):
+def make_thinking_scene(slide_path, duration=1.0, time_offset=0.0):
     base_img = Image.open(slide_path).convert("RGBA")
-    base_img.paste(char_think, (510, 1240), char_think)
-    temp_path = f"think_{slide_path}"
-    base_img.convert("RGB").save(temp_path)
-    return ImageClip(temp_path).with_duration(duration).with_audio(tick_sound)
+    fps = 24
 
-# 5. Assemble All 5 Scenes
+    def frame_func(t):
+        global_t = t + time_offset
+        bob_y = math.sin(global_t * 3.4) * 10.0
+        breath = 1.0 + 0.01 * math.sin(global_t * 3.4)
+        styled_sprite, dx, dy = apply_squash_stretch(char_think, breath)
+
+        x_pos = int(520 + dx)
+        y_pos = int(1380 + bob_y + dy)
+
+        frame = base_img.copy()
+        frame.paste(styled_sprite, (x_pos, y_pos), styled_sprite)
+        return np.array(frame.convert("RGB"))
+
+    return VideoClip(frame_func, duration=duration).with_audio(tick_sound).with_fps(fps)
+
+# 5. Assemble All 5 Scenes with Continuous Timeline Offset
 clips = []
+current_time = 0.0
 
-build_base_slide("s_intro.png", f"DIFFICULTY: {data['difficulty']}", data["intro_text"], f"{timer_seconds}-SEC CHALLENGE!", "#FFD700")
-clips.append(make_talking_scene("s_intro.png", "intro.mp3"))
+build_base_slide("s_intro.png", f"MATH MINUTE MARVELS • {data['difficulty']}", data["intro_text"], f"{timer_seconds}-SECOND CHALLENGE!", "#FFD700")
+c_intro = make_talking_scene("s_intro.png", "intro.mp3", current_time)
+clips.append(c_intro)
+current_time += c_intro.duration
 
 build_base_slide("s_q.png", "SOLVE IN YOUR HEAD", data["question_text"], "", "#38BDF8")
-clips.append(make_talking_scene("s_q.png", "question.mp3"))
+c_q = make_talking_scene("s_q.png", "question.mp3", current_time)
+clips.append(c_q)
+current_time += c_q.duration
 
 for sec in range(timer_seconds, 0, -1):
     t_slide = f"s_timer_{sec}.png"
     timer_color = "#FF4D4D" if sec <= 5 else "#FF9F43"
     build_base_slide(t_slide, f"DIFFICULTY: {data['difficulty']}", data["question_text"], f"TIME LEFT: {sec}s", timer_color)
-    clips.append(make_thinking_scene(t_slide, 1.0))
+    c_tick = make_thinking_scene(t_slide, 1.0, current_time)
+    clips.append(c_tick)
+    current_time += 1.0
 
-build_base_slide("s_sol.png", "STEP-BY-STEP SOLUTION", data["steps_text"], data["answer_text"], "#4ADE80", compact=True)
-clips.append(make_talking_scene("s_sol.png", "solution.mp3"))
+build_base_slide("s_sol.png", "STEP-BY-STEP SOLUTION", data["steps_text"], data["answer_text"], "#4ADE80")
+c_sol = make_talking_scene("s_sol.png", "solution.mp3", current_time)
+clips.append(c_sol)
+current_time += c_sol.duration
 
-build_base_slide("s_outro.png", "BEAT THE CLOCK?", "Comment your time below!\nSubscribe for daily puzzles!", "MATH MINUTE MARVELS", "#F472B6")
-clips.append(make_talking_scene("s_outro.png", "outro.mp3"))
+build_base_slide("s_outro.png", "BEAT THE CLOCK?", "Comment how many seconds it took!\nSubscribe for daily brainteasers!", "MATH MINUTE MARVELS", "#F472B6")
+c_outro = make_talking_scene("s_outro.png", "outro.mp3", current_time)
+clips.append(c_outro)
 
 # 6. Combine Video & Layer Looped Background Music
 final_video = concatenate_videoclips(clips, method="compose")
@@ -236,6 +296,7 @@ if os.path.exists("bgm.mp3"):
     ])
     final_audio = CompositeAudioClip([final_video.audio, bgm_looped])
     final_video = final_video.with_audio(final_audio)
+
 final_video.write_videofile("short.mp4", fps=24, codec="libx264", audio_codec="aac")
 
 # 7. Upload Publicly to YouTube Automatically
