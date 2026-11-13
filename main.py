@@ -82,17 +82,35 @@ if timer_seconds not in (30, 45, 60):
     timer_seconds = 30
 
 # 2. Generate Voiceovers via Edge-TTS 7.3.1
+from gtts import gTTS
+
+# 2. Generate Voiceovers Sequentially (with Automatic gTTS Backup)
 async def create_audio(text, filename):
-    communicate = edge_tts.Communicate(text, "en-US-AndrewNeural", rate="+8%")
-    await communicate.save(filename)
+    clean_text = str(text).strip() or "Let's solve this math puzzle!"
+    for voice in ["en-US-GuyNeural", "en-US-ChristopherNeural", "en-US-JennyNeural"]:
+        try:
+            communicate = edge_tts.Communicate(clean_text, voice)
+            await communicate.save(filename)
+            if os.path.exists(filename) and os.path.getsize(filename) > 0:
+                print(f"Generated {filename} with {voice}", flush=True)
+                return
+        except Exception as e:
+            print(f"Edge-TTS ({voice}) failed: {e}", flush=True)
+            await asyncio.sleep(1.5)
+
+    # Fallback to Google TTS if Microsoft blocks the GitHub server IP
+    print(f"Using gTTS fallback for {filename}...", flush=True)
+    tts = gTTS(text=clean_text, lang="en", slow=False)
+    tts.save(filename)
 
 async def generate_all_audio():
-    await asyncio.gather(
-        create_audio(data["intro_voice"], "intro.mp3"),
-        create_audio(data["question_voice"], "question.mp3"),
-        create_audio(data["solution_voice"], "solution.mp3"),
-        create_audio(data["outro_voice"], "outro.mp3"),
-    )
+    await create_audio(data["intro_voice"], "intro.mp3")
+    await asyncio.sleep(1)
+    await create_audio(data["question_voice"], "question.mp3")
+    await asyncio.sleep(1)
+    await create_audio(data["solution_voice"], "solution.mp3")
+    await asyncio.sleep(1)
+    await create_audio(data["outro_voice"], "outro.mp3")
 
 asyncio.run(generate_all_audio())
 
