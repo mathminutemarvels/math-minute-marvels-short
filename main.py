@@ -36,6 +36,7 @@ Rules:
   * 30 = EASY (1-2 quick mental steps)
   * 45 = MEDIUM (2-3 mental steps)
   * 60 = HARD (3-4 mental steps)
+- Keep "steps_text" to strictly 3 short, punchy lines (max 8 words per line) so it fits cleanly on a phone screen.
 Return JSON with these exact keys:
 - "difficulty": "EASY", "MEDIUM", or "HARD"
 - "timer_seconds": 30, 45, or 60
@@ -44,8 +45,8 @@ Return JSON with these exact keys:
 - "intro_voice": energetic 3-second spoken challenge to stop scrolling
 - "question_text": clean, short text of the math riddle for screen
 - "question_voice": spoken reading of the riddle + telling them the exact seconds on the clock
-- "steps_text": 3-4 short lines explaining the step-by-step solution clearly
-- "answer_text": bold final answer
+- "steps_text": 3 short lines explaining the step-by-step solution clearly
+- "answer_text": bold final answer (e.g., "Answer: 72")
 - "solution_voice": spoken step-by-step reveal of the trick and final answer
 - "outro_voice": fast 3-second outro asking them to comment their time and subscribe"""
 
@@ -122,8 +123,8 @@ def get_tick_clip():
 
 tick_sound = get_tick_clip()
 
-# 3. Build Clean Base Slides (1080x1920)
-def build_base_slide(output_name, badge, main_text, highlight="", badge_color="#FFD700"):
+# 3. Build Clean Base Slides (1080x1920) - Mobile Safe-Zone Aligned
+def build_base_slide(output_name, badge, main_text, highlight="", badge_color="#FFD700", compact=False):
     if isinstance(main_text, list):
         main_text = "\n".join(str(item) for item in main_text)
     if isinstance(highlight, list):
@@ -139,31 +140,38 @@ def build_base_slide(output_name, badge, main_text, highlight="", badge_color="#
     if not os.path.exists(font_path):
         font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 
+    body_size = 46 if compact else 60
+    wrap_width = 28 if compact else 22
+    line_spacing = 16 if compact else 24
+
     if os.path.exists(font_path):
-        font_badge = ImageFont.truetype(font_path, 54)
-        font_body = ImageFont.truetype(font_path, 64)
-        font_hl = ImageFont.truetype(font_path, 82)
+        font_badge = ImageFont.truetype(font_path, 48)
+        font_body = ImageFont.truetype(font_path, body_size)
+        font_hl = ImageFont.truetype(font_path, 68)
     else:
-        font_badge = ImageFont.load_default(size=54)
-        font_body = ImageFont.load_default(size=64)
-        font_hl = ImageFont.load_default(size=82)
+        font_badge = ImageFont.load_default(size=48)
+        font_body = ImageFont.load_default(size=body_size)
+        font_hl = ImageFont.load_default(size=68)
 
+    # Positioned at y=515 so it sits cleanly below "MATH MINUTE MARVELS" in bg.png
     wrapped_badge = "\n".join(textwrap.wrap(badge, width=26))
-    draw.multiline_text((W / 2, 430), wrapped_badge, fill=badge_color, font=font_badge, anchor="ma", align="center", spacing=12)
+    draw.multiline_text((W / 2, 515), wrapped_badge, fill=badge_color, font=font_badge, anchor="ma", align="center", spacing=10)
 
-    wrapped_body = "\n".join([textwrap.fill(line, width=22) for line in main_text.split("\n")])
-    draw.multiline_text((W / 2, 650), wrapped_body, fill="white", font=font_body, anchor="ma", align="center", spacing=26)
+    # Positioned at y=650 inside the center grid box
+    wrapped_body = "\n".join([textwrap.fill(line, width=wrap_width) for line in main_text.split("\n")])
+    draw.multiline_text((W / 2, 650), wrapped_body, fill="white", font=font_body, anchor="ma", align="center", spacing=line_spacing)
 
+    # Positioned at y=1110 above the mascot and YouTube bottom overlay
     if highlight:
-        wrapped_hl = "\n".join(textwrap.wrap(highlight, width=20))
-        draw.multiline_text((W / 2, 1180), wrapped_hl, fill="#00FFCC", font=font_hl, anchor="ma", align="center", spacing=14)
+        wrapped_hl = "\n".join(textwrap.wrap(highlight, width=18))
+        draw.multiline_text((W / 2, 1110), wrapped_hl, fill="#00FFCC", font=font_hl, anchor="ma", align="center", spacing=12)
 
     img.save(output_name)
 
-# 4. Lip-Sync Character Overlay Engine (MoviePy 2.2.1)
-char_closed = Image.open("char_closed.png").convert("RGBA").resize((460, 460))
-char_open = Image.open("char_open.png").convert("RGBA").resize((460, 460))
-char_think = Image.open("char_think.png").convert("RGBA").resize((460, 460)) if os.path.exists("char_think.png") else char_closed
+# 4. Lip-Sync Character Overlay Engine (Positioned Above YouTube Bottom UI)
+char_closed = Image.open("char_closed.png").convert("RGBA").resize((420, 420))
+char_open = Image.open("char_open.png").convert("RGBA").resize((420, 420))
+char_think = Image.open("char_think.png").convert("RGBA").resize((420, 420)) if os.path.exists("char_think.png") else char_closed
 
 def make_talking_scene(slide_path, audio_path):
     base_img = Image.open(slide_path).convert("RGBA")
@@ -183,15 +191,15 @@ def make_talking_scene(slide_path, audio_path):
 
         frame = base_img.copy()
         sprite = char_open if is_talking else char_closed
-        y_offset = 1370 if is_talking else 1380
-        frame.paste(sprite, (520, y_offset), sprite)
+        y_offset = 1230 if is_talking else 1240
+        frame.paste(sprite, (510, y_offset), sprite)
         return np.array(frame.convert("RGB"))
 
     return VideoClip(frame_func, duration=audio.duration).with_audio(audio).with_fps(fps)
 
 def make_thinking_scene(slide_path, duration=1.0):
     base_img = Image.open(slide_path).convert("RGBA")
-    base_img.paste(char_think, (520, 1380), char_think)
+    base_img.paste(char_think, (510, 1240), char_think)
     temp_path = f"think_{slide_path}"
     base_img.convert("RGB").save(temp_path)
     return ImageClip(temp_path).with_duration(duration).with_audio(tick_sound)
@@ -199,7 +207,7 @@ def make_thinking_scene(slide_path, duration=1.0):
 # 5. Assemble All 5 Scenes
 clips = []
 
-build_base_slide("s_intro.png", f"MATH MINUTE MARVELS • {data['difficulty']}", data["intro_text"], f"{timer_seconds}-SECOND CHALLENGE!", "#FFD700")
+build_base_slide("s_intro.png", f"DIFFICULTY: {data['difficulty']}", data["intro_text"], f"{timer_seconds}-SEC CHALLENGE!", "#FFD700")
 clips.append(make_talking_scene("s_intro.png", "intro.mp3"))
 
 build_base_slide("s_q.png", "SOLVE IN YOUR HEAD", data["question_text"], "", "#38BDF8")
@@ -211,10 +219,10 @@ for sec in range(timer_seconds, 0, -1):
     build_base_slide(t_slide, f"DIFFICULTY: {data['difficulty']}", data["question_text"], f"TIME LEFT: {sec}s", timer_color)
     clips.append(make_thinking_scene(t_slide, 1.0))
 
-build_base_slide("s_sol.png", "STEP-BY-STEP SOLUTION", data["steps_text"], data["answer_text"], "#4ADE80")
+build_base_slide("s_sol.png", "STEP-BY-STEP SOLUTION", data["steps_text"], data["answer_text"], "#4ADE80", compact=True)
 clips.append(make_talking_scene("s_sol.png", "solution.mp3"))
 
-build_base_slide("s_outro.png", "BEAT THE CLOCK?", "Comment how many seconds it took!\nSubscribe for daily brainteasers!", "MATH MINUTE MARVELS", "#F472B6")
+build_base_slide("s_outro.png", "BEAT THE CLOCK?", "Comment your time below!\nSubscribe for daily puzzles!", "MATH MINUTE MARVELS", "#F472B6")
 clips.append(make_talking_scene("s_outro.png", "outro.mp3"))
 
 # 6. Combine Video & Layer Looped Background Music
@@ -228,7 +236,6 @@ if os.path.exists("bgm.mp3"):
     ])
     final_audio = CompositeAudioClip([final_video.audio, bgm_looped])
     final_video = final_video.with_audio(final_audio)
-
 final_video.write_videofile("short.mp4", fps=24, codec="libx264", audio_codec="aac")
 
 # 7. Upload Publicly to YouTube Automatically
@@ -243,8 +250,7 @@ request = youtube.videos().insert(
     body={
         "snippet": {
             "title": f"{data['title']} #Shorts",
-
-                        "description": f"{data['question_text']}\n\nDifficulty: {data['difficulty']} ({timer_seconds}s timer). Did you beat the clock?\n#mathriddles #mentalmath #shorts",
+            "description": f"{data['question_text']}\n\nDifficulty: {data['difficulty']} ({timer_seconds}s timer). Did you beat the clock?\n#mathriddles #mentalmath #shorts",
             "categoryId": "27",
         },
         "status": {"privacyStatus": "public"},
@@ -253,4 +259,3 @@ request = youtube.videos().insert(
 )
 request.execute()
 print(f"Uploaded PUBLIC {timer_seconds}s {data['difficulty']} Short successfully!", flush=True)
-
