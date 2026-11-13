@@ -201,15 +201,15 @@ def make_talking_scene(slide_path, audio_path):
 
         frame = base_img.copy()
         sprite = char_open if is_talking else char_closed
-        y_offset = 1390 if is_talking else 1400
-        frame.paste(sprite, (580, y_offset), sprite)
+        y_offset = 1370 if is_talking else 1380
+        frame.paste(sprite, (520, y_offset), sprite)
         return np.array(frame.convert("RGB"))
 
     return VideoClip(frame_func, duration=audio.duration).with_audio(audio).with_fps(fps)
 
 def make_thinking_scene(slide_path, duration=1.0):
     base_img = Image.open(slide_path).convert("RGBA")
-    base_img.paste(char_think, (580, 1400), char_think)
+    base_img.paste(char_think, (520, 1380), char_think)
     temp_path = f"think_{slide_path}"
     base_img.convert("RGB").save(temp_path)
     return ImageClip(temp_path).with_duration(duration).with_audio(tick_sound)
@@ -226,7 +226,7 @@ clips.append(make_talking_scene("s_q.png", "question.mp3"))
 for sec in range(timer_seconds, 0, -1):
     t_slide = f"s_timer_{sec}.png"
     timer_color = "#FF4D4D" if sec <= 5 else "#FF9F43"
-    build_base_slide(t_slide, f"DIFFICULTY: {data['difficulty']}", data["question_text"], f"⏱️ {sec}s", timer_color)
+    build_base_slide(t_slide, f"DIFFICULTY: {data['difficulty']}", data["question_text"], f"TIME LEFT: {sec}s", timer_color)
     clips.append(make_thinking_scene(t_slide, 1.0))
 
 build_base_slide("s_sol.png", "STEP-BY-STEP SOLUTION", data["steps_text"], data["answer_text"], "#4ADE80")
