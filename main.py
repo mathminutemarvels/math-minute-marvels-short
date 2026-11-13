@@ -22,6 +22,9 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
 # 1. Generate Mental-Math Riddle via Gemini 3.8 Flash (Strict JSON Mode)
+import time
+from google.genai import errors
+
 client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 prompt = """Create a twisty mental-math puzzle for 'Math Minute Marvels'.
 Rules:
@@ -43,11 +46,28 @@ Return JSON with these exact keys:
 - "solution_voice": spoken step-by-step reveal of the trick and final answer
 - "outro_voice": fast 3-second outro asking them to comment their time and subscribe"""
 
-response = client.models.generate_content(
-    model="gemini-3.8-flash",
-    contents=prompt,
-    config=types.GenerateContentConfig(response_mime_type="application/json"),
-)
+models_to_try = ["gemini-3.8-flash", "gemini-2.5-flash", "gemini-2.5-flash-lite"]
+response = None
+
+for model_name in models_to_try:
+    for attempt in range(3):
+        try:
+            print(f"Trying {model_name} (attempt {attempt + 1})...")
+            response = client.models.generate_content(
+                model=model_name,
+                contents=prompt,
+                config=types.GenerateContentConfig(response_mime_type="application/json"),
+            )
+            break
+        except errors.ServerError as e:
+            print(f"{model_name} busy (503), waiting 5s...")
+            time.sleep(5)
+    if response:
+        break
+
+if not response:
+    raise RuntimeError("All Gemini models are temporarily overloaded. Try again shortly.")
+
 data = json.loads(response.text)
 
 timer_seconds = int(data.get("timer_seconds", 30))
