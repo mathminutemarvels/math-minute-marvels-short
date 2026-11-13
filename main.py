@@ -139,26 +139,39 @@ def build_base_slide(output_name, badge, main_text, highlight="", badge_color="#
     if not os.path.exists(font_path):
         font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 
+    # Slightly tighter body font when showing multi-line steps
+    is_long_text = len(main_text) > 85 or main_text.count("\n") >= 3
+    body_size = 54 if is_long_text else 64
+
     if os.path.exists(font_path):
-        font_badge = ImageFont.truetype(font_path, 54)
-        font_body = ImageFont.truetype(font_path, 64)
+        font_badge = ImageFont.truetype(font_path, 48)
+        font_body = ImageFont.truetype(font_path, body_size)
         font_hl = ImageFont.truetype(font_path, 82)
     else:
-        font_badge = ImageFont.load_default(size=54)
-        font_body = ImageFont.load_default(size=64)
+        font_badge = ImageFont.load_default(size=48)
+        font_body = ImageFont.load_default(size=body_size)
         font_hl = ImageFont.load_default(size=82)
 
-    wrapped_badge = "\n".join(textwrap.wrap(badge, width=26))
-    draw.multiline_text((W / 2, 410), wrapped_badge, fill=badge_color, font=font_badge, anchor="ma", align="center", spacing=12)
+    # 1. Place badge cleanly below the "MARVELS" logo text
+    wrapped_badge = "\n".join(textwrap.wrap(badge, width=28))
+    draw.multiline_text((W / 2, 485), wrapped_badge, fill=badge_color, font=font_badge, anchor="ma", align="center", spacing=10)
 
-    wrapped_body = "\n".join([textwrap.fill(line, width=22) for line in main_text.split("\n")])
-    draw.multiline_text((W / 2, 620), wrapped_body, fill="white", font=font_body, anchor="ma", align="center", spacing=26)
+    # 2. Place main question or steps below the badge
+    wrap_width = 26 if is_long_text else 22
+    line_spacing = 18 if is_long_text else 24
+    wrapped_body = "\n".join([textwrap.fill(line, width=wrap_width) for line in main_text.split("\n")])
+    body_y = 630
+    draw.multiline_text((W / 2, body_y), wrapped_body, fill="white", font=font_body, anchor="ma", align="center", spacing=line_spacing)
 
+    # 3. Dynamically measure body height so highlight/answer NEVER overlaps
     if highlight:
+        bbox = draw.multiline_textbbox((W / 2, body_y), wrapped_body, font=font_body, anchor="ma", align="center", spacing=line_spacing)
+        dynamic_hl_y = max(1160, bbox[3] + 55)
         wrapped_hl = "\n".join(textwrap.wrap(highlight, width=20))
-        draw.multiline_text((W / 2, 1150), wrapped_hl, fill="#00FFCC", font=font_hl, anchor="ma", align="center", spacing=14)
+        draw.multiline_text((W / 2, dynamic_hl_y), wrapped_hl, fill="#00FFCC", font=font_hl, anchor="ma", align="center", spacing=14)
 
     img.save(output_name)
+
 
 # 4. 5-Pose Smooth Lip-Sync, Blinking & Floating Character Engine
 def load_pose(filename, fallback_img=None):
