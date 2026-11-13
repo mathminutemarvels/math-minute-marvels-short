@@ -1,7 +1,7 @@
 name: Daily Math Short
 on:
   schedule:
-    - cron: '0 13 * * *' # Runs automatically every day at 6:30 PM IST
+    - cron: '0 13,17,21,1,5,9 * * *' # Runs automatically every day at 6:30 PM IST
   workflow_dispatch:      # Adds a manual "Run workflow" button for testing
 
 jobs:
