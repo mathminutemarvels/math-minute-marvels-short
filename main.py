@@ -23,9 +23,12 @@ from googleapiclient.http import MediaFileUpload
 
 # 1. Generate Mental-Math Riddle via Gemini 3.8 Flash (Strict JSON Mode)
 import time
-from google.genai import errors
 
-client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+client = genai.Client(
+    api_key=os.environ["GEMINI_API_KEY"],
+    http_options=types.HttpOptions(timeout=30000),  # 30-second max wait per attempt
+)
+
 prompt = """Create a twisty mental-math puzzle for 'Math Minute Marvels'.
 Rules:
 - Solvable in your head without pen/paper, with a clever trick or twist.
@@ -46,29 +49,32 @@ Return JSON with these exact keys:
 - "solution_voice": spoken step-by-step reveal of the trick and final answer
 - "outro_voice": fast 3-second outro asking them to comment their time and subscribe"""
 
-models_to_try = ["gemini-3.8-flash", "gemini-2.5-flash", "gemini-2.5-flash-lite"]
+models_to_try = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-3.8-flash"]
 response = None
 
 for model_name in models_to_try:
-    for attempt in range(3):
+    for attempt in range(2):
         try:
-            print(f"Trying {model_name} (attempt {attempt + 1})...")
+            print(f"Trying {model_name} (attempt {attempt + 1})...", flush=True)
             response = client.models.generate_content(
                 model=model_name,
                 contents=prompt,
                 config=types.GenerateContentConfig(response_mime_type="application/json"),
             )
-            break
-        except errors.ServerError as e:
-            print(f"{model_name} busy (503), waiting 5s...")
-            time.sleep(5)
-    if response:
+            if response and response.text:
+                print(f"Success with {model_name}!", flush=True)
+                break
+        except Exception as e:
+            print(f"{model_name} failed ({type(e).__name__}): {e}. Retrying in 3s...", flush=True)
+            time.sleep(3)
+    if response and response.text:
         break
 
-if not response:
-    raise RuntimeError("All Gemini models are temporarily overloaded. Try again shortly.")
+if not response or not response.text:
+    raise RuntimeError("All Gemini models failed or timed out.")
 
 data = json.loads(response.text)
+
 
 timer_seconds = int(data.get("timer_seconds", 30))
 if timer_seconds not in (30, 45, 60):
