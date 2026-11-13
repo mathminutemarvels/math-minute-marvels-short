@@ -129,17 +129,18 @@ def get_tick_clip():
 tick_sound = get_tick_clip()
 
 # 3. Build Clean Base Slides (1080x1920)
-import urllib.request
+    font_path = "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"
+    if not os.path.exists(font_path):
+        font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 
-# Auto-download bold font if font.ttf is not in the repo
-if not os.path.exists("font.ttf"):
-    try:
-        urllib.request.urlretrieve(
-            "https://github.com",
-            "font.ttf",
-        )
-    except Exception:
-        pass
+    if os.path.exists(font_path):
+        font_badge = ImageFont.truetype(font_path, 54)
+        font_body = ImageFont.truetype(font_path, 64)
+        font_hl = ImageFont.truetype(font_path, 82)
+    else:
+        font_badge = ImageFont.load_default(size=54)
+        font_body = ImageFont.load_default(size=64)
+        font_hl = ImageFont.load_default(size=82)
 
 # 3. Build Clean Base Slides (1080x1920)
 def build_base_slide(output_name, badge, main_text, highlight="", badge_color="#FFD700"):
