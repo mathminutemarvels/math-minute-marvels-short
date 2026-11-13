@@ -130,6 +130,13 @@ tick_sound = get_tick_clip()
 
 # 3. Build Clean Base Slides (1080x1920)
 def build_base_slide(output_name, badge, main_text, highlight="", badge_color="#FFD700"):
+    if isinstance(main_text, list):
+        main_text = "\n".join(str(item) for item in main_text)
+    if isinstance(highlight, list):
+        highlight = "\n".join(str(item) for item in highlight)
+    main_text = str(main_text)
+    highlight = str(highlight)
+
     img = Image.open("bg.png").convert("RGBA").resize((1080, 1920))
     draw = ImageDraw.Draw(img)
     W, H = img.size
