@@ -1,11 +1,13 @@
 import os
 import json
+import time
 import asyncio
 import textwrap
 import numpy as np
 from google import genai
 from google.genai import types
 import edge_tts
+from gtts import gTTS
 from PIL import Image, ImageDraw, ImageFont
 from moviepy import (
     ImageClip,
@@ -21,14 +23,11 @@ from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
-# 1. Generate Mental-Math Riddle via Gemini 3.8 Flash (Strict JSON Mode)
-import time
-
+# 1. Generate Twisty Mental-Math Riddle via Gemini (with Automatic Fallback)
 client = genai.Client(
     api_key=os.environ["GEMINI_API_KEY"],
-    http_options=types.HttpOptions(timeout=90000),  # 90-second wait so 3.8-flash finishes cleanly
+    http_options=types.HttpOptions(timeout=90000),
 )
-
 
 prompt = """Create a twisty mental-math puzzle for 'Math Minute Marvels'.
 Rules:
@@ -54,7 +53,7 @@ models_to_try = ["gemini-3.8-flash", "gemini-3.5-flash-lite"]
 response = None
 
 for model_name in models_to_try:
-    for attempt in range(2):
+    for attempt in range(3):
         try:
             print(f"Trying {model_name} (attempt {attempt + 1})...", flush=True)
             response = client.models.generate_content(
@@ -66,8 +65,8 @@ for model_name in models_to_try:
                 print(f"Success with {model_name}!", flush=True)
                 break
         except Exception as e:
-            print(f"{model_name} failed ({type(e).__name__}): {e}. Retrying in 3s...", flush=True)
-            time.sleep(3)
+            print(f"{model_name} failed ({type(e).__name__}): {e}. Retrying in 5s...", flush=True)
+            time.sleep(5)
     if response and response.text:
         break
 
@@ -76,13 +75,9 @@ if not response or not response.text:
 
 data = json.loads(response.text)
 
-
 timer_seconds = int(data.get("timer_seconds", 30))
 if timer_seconds not in (30, 45, 60):
     timer_seconds = 30
-
-# 2. Generate Voiceovers via Edge-TTS 7.3.1
-from gtts import gTTS
 
 # 2. Generate Voiceovers Sequentially (with Automatic gTTS Backup)
 async def create_audio(text, filename):
@@ -98,7 +93,6 @@ async def create_audio(text, filename):
             print(f"Edge-TTS ({voice}) failed: {e}", flush=True)
             await asyncio.sleep(1.5)
 
-    # Fallback to Google TTS if Microsoft blocks the GitHub server IP
     print(f"Using gTTS fallback for {filename}...", flush=True)
     tts = gTTS(text=clean_text, lang="en", slow=False)
     tts.save(filename)
@@ -129,6 +123,18 @@ def get_tick_clip():
 tick_sound = get_tick_clip()
 
 # 3. Build Clean Base Slides (1080x1920)
+def build_base_slide(output_name, badge, main_text, highlight="", badge_color="#FFD700"):
+    if isinstance(main_text, list):
+        main_text = "\n".join(str(item) for item in main_text)
+    if isinstance(highlight, list):
+        highlight = "\n".join(str(item) for item in highlight)
+    main_text = str(main_text)
+    highlight = str(highlight)
+
+    img = Image.open("bg.png").convert("RGBA").resize((1080, 1920))
+    draw = ImageDraw.Draw(img)
+    W, H = img.size
+
     font_path = "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"
     if not os.path.exists(font_path):
         font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
@@ -142,37 +148,12 @@ tick_sound = get_tick_clip()
         font_body = ImageFont.load_default(size=64)
         font_hl = ImageFont.load_default(size=82)
 
-# 3. Build Clean Base Slides (1080x1920)
-def build_base_slide(output_name, badge, main_text, highlight="", badge_color="#FFD700"):
-    if isinstance(main_text, list):
-        main_text = "\n".join(str(item) for item in main_text)
-    if isinstance(highlight, list):
-        highlight = "\n".join(str(item) for item in highlight)
-    main_text = str(main_text)
-    highlight = str(highlight)
-
-    img = Image.open("bg.png").convert("RGBA").resize((1080, 1920))
-    draw = ImageDraw.Draw(img)
-    W, H = img.size
-
-    if os.path.exists("font.ttf"):
-        font_badge = ImageFont.truetype("font.ttf", 54)
-        font_body = ImageFont.truetype("font.ttf", 64)
-        font_hl = ImageFont.truetype("font.ttf", 82)
-    else:
-        font_badge = ImageFont.load_default(size=54)
-        font_body = ImageFont.load_default(size=64)
-        font_hl = ImageFont.load_default(size=82)
-
-    # Moved down to y=430 so it never touches "MATH MINUTE MARVELS" in bg.png
     wrapped_badge = "\n".join(textwrap.wrap(badge, width=26))
     draw.multiline_text((W / 2, 430), wrapped_badge, fill=badge_color, font=font_badge, anchor="ma", align="center", spacing=12)
 
-    # Centered inside the grid box
     wrapped_body = "\n".join([textwrap.fill(line, width=22) for line in main_text.split("\n")])
     draw.multiline_text((W / 2, 650), wrapped_body, fill="white", font=font_body, anchor="ma", align="center", spacing=26)
 
-    # Highlight (Timer or Final Answer) at bottom of grid box
     if highlight:
         wrapped_hl = "\n".join(textwrap.wrap(highlight, width=20))
         draw.multiline_text((W / 2, 1180), wrapped_hl, fill="#00FFCC", font=font_hl, anchor="ma", align="center", spacing=14)
@@ -236,7 +217,7 @@ clips.append(make_talking_scene("s_sol.png", "solution.mp3"))
 build_base_slide("s_outro.png", "BEAT THE CLOCK?", "Comment how many seconds it took!\nSubscribe for daily brainteasers!", "MATH MINUTE MARVELS", "#F472B6")
 clips.append(make_talking_scene("s_outro.png", "outro.mp3"))
 
-# 6. Combine Video & Layer Looped Background Music (MoviePy 2.2.1 Effects)
+# 6. Combine Video & Layer Looped Background Music
 final_video = concatenate_videoclips(clips, method="compose")
 
 if os.path.exists("bgm.mp3"):
@@ -250,7 +231,7 @@ if os.path.exists("bgm.mp3"):
 
 final_video.write_videofile("short.mp4", fps=24, codec="libx264", audio_codec="aac")
 
-# 7. Upload to YouTube Automatically
+# 7. Upload Publicly to YouTube Automatically
 creds_data = json.loads(os.environ["YOUTUBE_TOKEN_JSON"])
 creds = Credentials.from_authorized_user_info(creds_data)
 if creds.expired and creds.refresh_token:
@@ -262,12 +243,14 @@ request = youtube.videos().insert(
     body={
         "snippet": {
             "title": f"{data['title']} #Shorts",
-            "description": f"{data['question_text']}\n\nDifficulty: {data['difficulty']} ({timer_seconds}s timer). Did you beat the clock?\n#mathriddles #mentalmath #shorts",
+
+                        "description": f"{data['question_text']}\n\nDifficulty: {data['difficulty']} ({timer_seconds}s timer). Did you beat the clock?\n#mathriddles #mentalmath #shorts",
             "categoryId": "27",
         },
-        "status": {"privacyStatus": "private"},
+        "status": {"privacyStatus": "public"},
     },
     media_body=MediaFileUpload("short.mp4"),
 )
 request.execute()
-print(f"Uploaded {timer_seconds}s {data['difficulty']} Short successfully!")
+print(f"Uploaded PUBLIC {timer_seconds}s {data['difficulty']} Short successfully!", flush=True)
+
