@@ -1,6 +1,7 @@
 import os
 import json
 import time
+import random
 import asyncio
 import textwrap
 import numpy as np
@@ -23,15 +24,41 @@ from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
-# 1. Generate Twisty Mental-Math Riddle via Gemini (with Automatic Fallback)
+# 1. Generate a Fresh, Non-Repeating Mental-Math Riddle via Gemini
 client = genai.Client(
     api_key=os.environ["GEMINI_API_KEY"],
     http_options=types.HttpOptions(timeout=90000),
 )
 
-prompt = """Create a twisty mental-math puzzle for 'Math Minute Marvels'.
+topics = [
+    "percentage reversal trick (X% of Y = Y% of X, using fresh 2-digit numbers)",
+    "multiplying two numbers close to 100 (e.g., 97 x 94 or 103 x 106)",
+    "squaring a 2-digit number ending in 5 or close to 50",
+    "fast mental division or multiplication by 5, 25, or 125",
+    "short algebraic age, coin, or bat-and-ball style word riddle",
+    "clever fraction cancellation or decimal trick",
+    "order-of-operations viral trap with parentheses and division",
+    "difference of two squares trick (a^2 - b^2 = (a+b)(a-b)) with fresh numbers",
+]
+
+title_styles = [
+    "Start title with 'Only 1% Can Solve:'",
+    "Start title with 'Brain Age Test:'",
+    "Start title with 'Harvard Interview Math:'",
+    "Start title with 'Stop Using a Calculator:'",
+    "Start title with 'Beat The Clock:'",
+    "Start title with 'Genius Math Shortcut:'",
+]
+
+chosen_topic = random.choice(topics)
+chosen_style = random.choice(title_styles)
+
+prompt = f"""Create a twisty mental-math puzzle for 'Math Minute Marvels'.
 Rules:
 - Solvable in your head without pen/paper, with a clever trick or twist.
+- Focus specifically on this topic: {chosen_topic}
+- Title rule: {chosen_style} (keep under 55 chars, NO #Shorts tag in the JSON title).
+- Never use the numbers 95, 96, 48, or 75 so every puzzle is 100% fresh.
 - Choose timer_seconds strictly from 30, 45, or 60 based on difficulty:
   * 30 = EASY (1-2 quick mental steps)
   * 45 = MEDIUM (2-3 mental steps)
