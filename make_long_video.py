@@ -41,6 +41,8 @@ Rules:
 - Keep each "steps_text" to strictly 3 short, punchy lines (max 9 words per line).
 Return JSON with these exact keys:
 - "video_title": catchy YouTube title under 65 chars (NO #Shorts tag)
+- "thumb_hook": punchy 3-word thumbnail hook in ALL CAPS (e.g., "99% FAIL LEVEL 5")
+- "thumb_math": short 1-line math teaser for thumbnail (e.g., "8 ÷ 2(2+2) = ?")
 - "intro_hook": bold on-screen hook (e.g., "CAN YOU BEAT ALL 5 LEVELS?")
 - "intro_voice": energetic 8-second welcome explaining the 5 escalating rounds
 - "rounds": list of 5 objects, each with:
@@ -121,8 +123,7 @@ def get_tick_clip():
     return AudioArrayClip(np.column_stack((wave, wave)), fps=sr)
 
 tick_sound = get_tick_clip()
-
-# 3. Build Widescreen 1920x1080 Base Slides
+# 3. Build Widescreen 1920x1080 Base Slides (Centered Inside Glowing Cyan Box)
 def build_wide_slide(output_name, badge, main_text, highlight="", badge_color="#FFD700", compact=False):
     if isinstance(main_text, list):
         main_text = "\n".join(str(item) for item in main_text)
@@ -258,7 +259,31 @@ if os.path.exists("bgm.mp3"):
 
 final_video.write_videofile("long_video.mp4", fps=24, codec="libx264", audio_codec="aac", preset="ultrafast", threads=4)
 
-# 7. Upload Publicly to YouTube with Auto-Generated Chapters
+# Helper: Generate High-CTR Widescreen Thumbnail (1280x720)
+def create_long_thumbnail(hook_line, teaser_math, output_path="thumb_long.jpg"):
+    thumb = Image.open("bg_long.png").convert("RGBA").resize((1280, 720))
+    draw = ImageDraw.Draw(thumb)
+
+    font_path = "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"
+    if not os.path.exists(font_path):
+        font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+
+    font_top = ImageFont.truetype(font_path, 56) if os.path.exists(font_path) else ImageFont.load_default(size=56)
+    font_big = ImageFont.truetype(font_path, 82) if os.path.exists(font_path) else ImageFont.load_default(size=82)
+
+    mascot_img = Image.open("char_think.png" if os.path.exists("char_think.png") else "char_closed.png").convert("RGBA").resize((430, 430))
+    thumb.paste(mascot_img, (830, 260), mascot_img)
+
+    wrapped_hook = "\n".join(textwrap.wrap(str(hook_line).upper(), width=15))
+    draw.multiline_text((410, 220), wrapped_hook, fill="#FFD700", font=font_top, anchor="ma", align="center", spacing=10)
+
+    wrapped_math = "\n".join(textwrap.wrap(str(teaser_math), width=14))
+    draw.multiline_text((410, 415), wrapped_math, fill="#00FFCC", font=font_big, anchor="ma", align="center", spacing=12)
+
+    thumb.convert("RGB").save(output_path, "JPEG", quality=92)
+    return output_path
+
+# 7. Upload Publicly to YouTube with Auto-Generated Chapters & Custom Thumbnail
 chapter_text = "\n".join(chapters)
 description = (
     f"Test your brainpower with 5 escalating mental math riddles on Math Minute Marvels!\n\n"
@@ -285,5 +310,18 @@ request = youtube.videos().insert(
     },
     media_body=MediaFileUpload("long_video.mp4"),
 )
-request.execute()
-print("Uploaded PUBLIC 5-Round Long Video successfully!", flush=True)
+video_response = request.execute()
+video_id = video_response["id"]
+print(f"Uploaded PUBLIC 5-Round Long Video ({video_id})!", flush=True)
+
+try:
+    t_hook = data.get("thumb_hook", "99% FAIL LEVEL 5")
+    t_math = data.get("thumb_math", "CAN YOU SOLVE ALL 5?")
+    thumb_file = create_long_thumbnail(t_hook, t_math)
+    youtube.thumbnails().set(
+        videoId=video_id,
+        media_body=MediaFileUpload(thumb_file, mimetype="image/jpeg")
+    ).execute()
+    print(f"Uploaded custom Long Video thumbnail for {video_id}!", flush=True)
+except Exception as e:
+    print(f"Long Video thumbnail skipped: {e}", flush=True)
