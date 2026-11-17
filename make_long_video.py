@@ -138,28 +138,29 @@ def build_wide_slide(output_name, badge, main_text, highlight="", badge_color="#
     if not os.path.exists(font_path):
         font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 
-    body_size = 44 if compact else 54
-    wrap_width = 36 if compact else 30
+    body_size = 42 if compact else 52
+    wrap_width = 32 if compact else 26
     line_spacing = 16 if compact else 22
 
     if os.path.exists(font_path):
-        font_badge = ImageFont.truetype(font_path, 46)
+        font_badge = ImageFont.truetype(font_path, 42)
         font_body = ImageFont.truetype(font_path, body_size)
-        font_hl = ImageFont.truetype(font_path, 64)
+        font_hl = ImageFont.truetype(font_path, 60)
     else:
-        font_badge = ImageFont.load_default(size=46)
+        font_badge = ImageFont.load_default(size=42)
         font_body = ImageFont.load_default(size=body_size)
-        font_hl = ImageFont.load_default(size=64)
+        font_hl = ImageFont.load_default(size=60)
 
-    board_center_x = 720
-    draw.multiline_text((board_center_x, 220), badge, fill=badge_color, font=font_badge, anchor="ma", align="center", spacing=10)
+    # Centered inside the glowing cyan rectangle (x=615) and below its top border (y=305)
+    board_center_x = 615
+    draw.multiline_text((board_center_x, 305), badge, fill=badge_color, font=font_badge, anchor="ma", align="center", spacing=10)
 
     wrapped_body = "\n".join([textwrap.fill(line, width=wrap_width) for line in main_text.split("\n")])
-    draw.multiline_text((board_center_x, 340), wrapped_body, fill="white", font=font_body, anchor="ma", align="center", spacing=line_spacing)
+    draw.multiline_text((board_center_x, 415), wrapped_body, fill="white", font=font_body, anchor="ma", align="center", spacing=line_spacing)
 
     if highlight:
-        wrapped_hl = "\n".join(textwrap.wrap(highlight, width=26))
-        draw.multiline_text((board_center_x, 790), wrapped_hl, fill="#00FFCC", font=font_hl, anchor="ma", align="center", spacing=12)
+        wrapped_hl = "\n".join(textwrap.wrap(highlight, width=24))
+        draw.multiline_text((board_center_x, 795), wrapped_hl, fill="#00FFCC", font=font_hl, anchor="ma", align="center", spacing=12)
 
     img.save(output_name)
 # 4. Widescreen Lip-Sync Mascot Overlay (Bottom-Right Corner)
