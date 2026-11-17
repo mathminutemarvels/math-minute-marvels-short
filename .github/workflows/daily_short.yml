@@ -1,8 +1,11 @@
 name: Daily Math Short
 on:
   schedule:
-    - cron: '0 13,17,21,1,5,9 * * *' # Runs automatically every day at 6:30 PM IST
-  workflow_dispatch:      # Adds a manual "Run workflow" button for testing
+    # Mon, Tue, Thu, Fri, Sat: 6 Shorts/day (6:30 PM, 10:30 PM, 2:30 AM, 6:30 AM, 10:30 AM, 2:30 PM IST)
+    - cron: '0 13,17,21,1,5,9 * * 1,2,4,5,6'
+    # Wed & Sun: 5 Shorts/day (skips 6:30 PM IST slot so Weekly Long Video uses that API quota)
+    - cron: '0 17,21,1,5,9 * * 0,3'
+  workflow_dispatch: # Allows manual test runs anytime
 
 jobs:
   build-and-upload:
