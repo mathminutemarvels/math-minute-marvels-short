@@ -1,8 +1,10 @@
 name: Daily Math Short
 on:
   schedule:
+    # Runs 6 times a day (every 4 hours):
+    # 6:30 PM, 10:30 PM, 2:30 AM, 6:30 AM, 10:30 AM, and 2:30 PM IST
     - cron: '0 13,17,21,1,5,9 * * *'
-  workflow_dispatch:
+  workflow_dispatch: # Allows manual test runs anytime
 
 jobs:
   build-and-upload:
@@ -25,4 +27,5 @@ jobs:
           git config user.email "github-actions[bot]@://github.com"
           git add history.json
           git commit -m "Update question history" || exit 0
-          git push
+          git pull --rebase origin main
+          git push origin main
