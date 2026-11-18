@@ -248,7 +248,7 @@ intro_clip = make_talking_scene("l_intro.png", "long_intro.mp3")
 clips.append(intro_clip)
 elapsed += intro_clip.duration
 
-valid_timers =
+valid_timers = [15, 20, 30, 45, 60]
 
 for idx, rnd in enumerate(data["rounds"], start=1):
     mins = int(elapsed // 60)
