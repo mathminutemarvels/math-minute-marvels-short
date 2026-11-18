@@ -24,6 +24,18 @@ from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
+# Load past questions so Gemini never repeats already-uploaded puzzles
+history_file = "history.json"
+past_questions = []
+if os.path.exists(history_file):
+    try:
+        with open(history_file, "r", encoding="utf-8") as f:
+            past_questions = json.load(f)
+    except Exception:
+        past_questions = []
+
+recent_avoid = "\n".join(f"- {q}" for q in past_questions[-80:]) or "- None yet"
+
 # 1. Generate a Fresh, Non-Repeating Mental-Math Riddle via Gemini
 client = genai.Client(
     api_key=os.environ["GEMINI_API_KEY"],
@@ -31,14 +43,14 @@ client = genai.Client(
 )
 
 topics = [
-    "percentage reversal trick (X% of Y = Y% of X, using fresh 2-digit numbers)",
-    "multiplying two numbers close to 100 (e.g., 97 x 94 or 103 x 106)",
-    "squaring a 2-digit number ending in 5 or close to 50",
-    "fast mental division or multiplication by 5, 25, or 125",
-    "short algebraic age, coin, or bat-and-ball style word riddle",
-    "clever fraction cancellation or decimal trick",
-    "order-of-operations viral trap with parentheses and division",
-    "difference of two squares trick (a^2 - b^2 = (a+b)(a-b)) with fresh numbers",
+    "Missing operator or missing number gap puzzle using +, -, ×, ÷, =, and [ ? ]",
+    "Percentage swap shortcut using = and [ ? ] (e.g., 36% of 25 + 24% of 25 = [ ? ])",
+    "Multiplying two numbers close to 100 using × and = (e.g., 97 × 94 = [ ? ])",
+    "Squaring a 2-digit number ending in 5 or close to 50 using × and =",
+    "Fast mental division or multiplication by 5, 25, or 125 using ÷, ×, and [ ? ]",
+    "Order-of-operations viral trap using ÷, ×, +, -, and ( )",
+    "Difference of two squares shortcut using - and = (e.g., 84² - 16² = [ ? ])",
+    "Sequence pattern gap puzzle using +, ×, and [ ? ] (e.g., 3, 7, 15, 31, [ ? ])",
 ]
 
 title_styles = [
@@ -52,28 +64,31 @@ title_styles = [
 
 chosen_topic = random.choice(topics)
 chosen_style = random.choice(title_styles)
+seed_number = random.randint(1000, 9999)
 
-prompt = f"""Create a twisty mental-math puzzle for 'Math Minute Marvels'.
+prompt = f"""Create a twisty mental-math puzzle for 'Math Minute Marvels' (Seed #{seed_number}).
 Rules:
 - Solvable in your head without pen/paper, with a clever trick or twist.
 - Focus specifically on this topic: {chosen_topic}
 - Title rule: {chosen_style} (keep under 55 chars, NO #Shorts tag in the JSON title).
-- Never use the numbers 95, 96, 48, or 75 so every puzzle is 100% fresh.
+- Use clean math symbols (+, -, ×, ÷, =) and use "[ ? ]" as the blank gap for the unknown value.
+- CRITICAL UNIQUENESS RULE: Do NOT repeat, rephrase, or use the same numbers/structure as ANY of these already-uploaded questions:
+{recent_avoid}
 - Choose timer_seconds strictly from 30, 45, or 60 based on difficulty:
   * 30 = EASY (1-2 quick mental steps)
   * 45 = MEDIUM (2-3 mental steps)
   * 60 = HARD (3-4 mental steps)
-- Keep "steps_text" to strictly 3 short, punchy lines (max 8 words per line) so it fits cleanly on a phone screen.
+- Keep "steps_text" to strictly 3 short, punchy equation lines (max 8 words per line).
 Return JSON with these exact keys:
 - "difficulty": "EASY", "MEDIUM", or "HARD"
 - "timer_seconds": 30, 45, or 60
 - "title": catchy YouTube title under 55 chars
 - "intro_text": bold 4-word hook on screen
 - "intro_voice": energetic 3-second spoken challenge to stop scrolling
-- "question_text": clean, short text of the math riddle for screen
-- "question_voice": spoken reading of the riddle + telling them the exact seconds on the clock
-- "steps_text": 3 short lines explaining the step-by-step solution clearly
-- "answer_text": bold final answer (e.g., "Answer: 72")
+- "question_text": clean visual equation with +, -, ×, ÷, = and [ ? ]
+- "question_voice": spoken reading of the equation + telling them the exact seconds on the clock
+- "steps_text": 3 short equation lines showing the mental shortcut
+- "answer_text": bold final answer (e.g., "[ ? ] = 72")
 - "solution_voice": spoken step-by-step reveal of the trick and final answer
 - "outro_voice": fast 3-second outro asking them to comment their time and subscribe"""
 
@@ -106,9 +121,12 @@ data = json.loads(response.text)
 timer_seconds = int(data.get("timer_seconds", 30))
 if timer_seconds not in (30, 45, 60):
     timer_seconds = 30
+
 # 2. Generate Voiceovers Sequentially (with Automatic gTTS Backup)
 async def create_audio(text, filename):
-    clean_text = str(text).strip() or "Let's solve this math puzzle!"
+    clean_text = str(text).replace("[ ? ]", "what number").replace("[?]", "what number").strip()
+    if not clean_text:
+        clean_text = "Let's solve this math puzzle!"
     for voice in ["en-US-GuyNeural", "en-US-ChristopherNeural", "en-US-JennyNeural"]:
         try:
             communicate = edge_tts.Communicate(clean_text, voice)
@@ -144,18 +162,19 @@ def get_tick_clip():
     t = np.linspace(0, 1.0, sr, endpoint=False)
     envelope = np.exp(-t * 45)
     wave = 0.35 * envelope * (np.sin(2 * np.pi * 800 * t) + 0.5 * np.sin(2 * np.pi * 1600 * t))
-    stereo_wave = np.column_stack((wave, wave))
-    return AudioArrayClip(stereo_wave, fps=sr)
+    return AudioArrayClip(np.column_stack((wave, wave)), fps=sr)
 
 tick_sound = get_tick_clip()
+
+def format_math_symbols(text):
+    if isinstance(text, list):
+        text = "\n".join(str(item) for item in text)
+    return str(text).replace(" * ", " × ").replace(" / ", " ÷ ")
+
 # 3. Build Clean Base Slides (1080x1920) - Mobile Safe-Zone Aligned
 def build_base_slide(output_name, badge, main_text, highlight="", badge_color="#FFD700", compact=False):
-    if isinstance(main_text, list):
-        main_text = "\n".join(str(item) for item in main_text)
-    if isinstance(highlight, list):
-        highlight = "\n".join(str(item) for item in highlight)
-    main_text = str(main_text)
-    highlight = str(highlight)
+    main_text = format_math_symbols(main_text)
+    highlight = format_math_symbols(highlight)
 
     img = Image.open("bg.png").convert("RGBA").resize((1080, 1920))
     draw = ImageDraw.Draw(img)
@@ -189,6 +208,7 @@ def build_base_slide(output_name, badge, main_text, highlight="", badge_color="#
         draw.multiline_text((W / 2, 1110), wrapped_hl, fill="#00FFCC", font=font_hl, anchor="ma", align="center", spacing=12)
 
     img.save(output_name)
+
 # 4. Lip-Sync Character Overlay Engine (Positioned Above YouTube Bottom UI)
 char_closed = Image.open("char_closed.png").convert("RGBA").resize((420, 420))
 char_open = Image.open("char_open.png").convert("RGBA").resize((420, 420))
@@ -245,6 +265,7 @@ clips.append(make_talking_scene("s_sol.png", "solution.mp3"))
 
 build_base_slide("s_outro.png", "BEAT THE CLOCK?", "Comment your time below!\nSubscribe for daily puzzles!", "MATH MINUTE MARVELS", "#F472B6")
 clips.append(make_talking_scene("s_outro.png", "outro.mp3"))
+
 # 6. Combine Video & Layer Looped Background Music
 final_video = concatenate_videoclips(clips, method="compose")
 
@@ -277,13 +298,14 @@ def create_short_thumbnail(hook_line, teaser_math, output_path="thumb_short.jpg"
     wrapped_hook = "\n".join(textwrap.wrap(str(hook_line).upper(), width=16))
     draw.multiline_text((540, 530), wrapped_hook, fill="#FFD700", font=font_hook, anchor="ma", align="center", spacing=12)
 
-    wrapped_math = "\n".join(textwrap.wrap(str(teaser_math), width=18))
+    clean_teaser = format_math_symbols(teaser_math)
+    wrapped_math = "\n".join(textwrap.wrap(clean_teaser, width=18))
     draw.multiline_text((540, 780), wrapped_math, fill="#00FFCC", font=font_math, anchor="ma", align="center", spacing=14)
 
     thumb.convert("RGB").save(output_path, "JPEG", quality=92)
     return output_path
 
-# 7. Upload Publicly to YouTube & Attach Thumbnail Automatically
+# 7. Upload Publicly to YouTube, Attach Thumbnail & Save Question History
 creds_data = json.loads(os.environ["YOUTUBE_TOKEN_JSON"])
 creds = Credentials.from_authorized_user_info(creds_data)
 if creds.expired and creds.refresh_token:
@@ -316,3 +338,8 @@ try:
     print(f"Uploaded custom Shorts thumbnail for {video_id}!", flush=True)
 except Exception as e:
     print(f"Shorts thumbnail skipped: {e}", flush=True)
+
+past_questions.append(str(data["question_text"]).strip())
+with open(history_file, "w", encoding="utf-8") as f:
+    json.dump(past_questions[-150:], f, indent=2)
+
