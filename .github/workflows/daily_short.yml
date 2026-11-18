@@ -1,15 +1,14 @@
 name: Daily Math Short
 on:
   schedule:
-    # Mon, Tue, Thu, Fri, Sat: 6 Shorts/day (6:30 PM, 10:30 PM, 2:30 AM, 6:30 AM, 10:30 AM, 2:30 PM IST)
-    - cron: '0 13,17,21,1,5,9 * * 1,2,4,5,6'
-    # Wed & Sun: 5 Shorts/day (skips 6:30 PM IST slot so Weekly Long Video uses that API quota)
-    - cron: '0 17,21,1,5,9 * * 0,3'
-  workflow_dispatch: # Allows manual test runs anytime
+    - cron: '0 13,17,21,1,5,9 * * *'
+  workflow_dispatch:
 
 jobs:
   build-and-upload:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -20,3 +19,10 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           YOUTUBE_TOKEN_JSON: ${{ secrets.YOUTUBE_TOKEN_JSON }}
         run: python main.py
+      - name: Save question history
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@://github.com"
+          git add history.json
+          git commit -m "Update question history" || exit 0
+          git push
