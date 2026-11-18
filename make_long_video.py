@@ -1,6 +1,7 @@
 import os
 import json
 import time
+import random
 import asyncio
 import textwrap
 import numpy as np
@@ -23,38 +24,70 @@ from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
-# 1. Generate a 5-Round Escalating Mental-Math Quiz via Gemini
+# Load past questions so Gemini never repeats already-uploaded puzzles
+history_file = "history.json"
+past_questions = []
+if os.path.exists(history_file):
+    try:
+        with open(history_file, "r", encoding="utf-8") as f:
+            past_questions = json.load(f)
+    except Exception:
+        past_questions = []
+
+recent_avoid = "\n".join(f"- {q}" for q in past_questions[-80:]) or "- None yet"
+
+# 1. Generate a Non-Repeating 5-Round Mental-Math Quiz via Gemini
 client = genai.Client(
     api_key=os.environ["GEMINI_API_KEY"],
     http_options=types.HttpOptions(timeout=120000),
 )
 
-prompt = """Create a 5-round escalating mental-math challenge video for 'Math Minute Marvels'.
+round_pools = [
+    "Missing operator or missing number gap puzzle using +, -, ×, ÷, =, and [ ? ] (e.g., 14 + [ ? ] × 3 = 35)",
+    "Percentage swap shortcut using = and [ ? ] (e.g., 36% of 25 + 24% of 25 = [ ? ])",
+    "Fast multiplication near 100 using × and = (e.g., 98 × 96 = [ ? ])",
+    "Order-of-operations trap using ÷, ×, +, -, and ( ) (e.g., 48 ÷ 2 × (9 + 3) = [ ? ])",
+    "Difference of two squares shortcut using - and = (e.g., 84² - 16² = [ ? ])",
+    "Clever fraction or division cancellation using ÷, ×, and [ ? ] (e.g., (72 × 35) ÷ 18 = [ ? ])",
+    "Two-step missing gap equation (e.g., ( [ ? ] ÷ 4 ) + 19 = 31)",
+    "Squaring numbers ending in 5 or near 50 using × and = (e.g., 65 × 65 = [ ? ])",
+    "Sequence pattern gap puzzle using +, ×, and [ ? ] (e.g., 3, 7, 15, 31, [ ? ])",
+]
+
+selected_topics = random.sample(round_pools, 5)
+seed_number = random.randint(1000, 9999)
+
+prompt = f"""Create a 5-round escalating mental-math challenge video for 'Math Minute Marvels' (Seed #{seed_number}).
 Rules:
-- All 5 riddles must be solvable in your head without pen or paper, each featuring a clever twist or trick.
-- Escalate the difficulty across 5 rounds with these exact timer_seconds:
-  * Round 1: "WARM-UP" -> timer_seconds: 15
-  * Round 2: "EASY" -> timer_seconds: 20
-  * Round 3: "MEDIUM" -> timer_seconds: 30
-  * Round 4: "HARD" -> timer_seconds: 45
-  * Round 5: "GENIUS BOSS" -> timer_seconds: 60
-- Keep each "steps_text" to strictly 3 short, punchy lines (max 9 words per line).
+- All 5 riddles must be solvable in your head without pen or paper, each featuring a clever mental shortcut.
+- All 5 rounds MUST be completely different from each other. Assign these exact 5 distinct topics:
+  * Round 1 ("WARM-UP", timer_seconds: 15): {selected_topics}
+  * Round 2 ("EASY", timer_seconds: 20): {selected_topics}
+  * Round 3 ("MEDIUM", timer_seconds: 30): {selected_topics}
+  * Round 4 ("HARD", timer_seconds: 45): {selected_topics}
+  * Round 5 ("GENIUS BOSS", timer_seconds: 60): {selected_topics}
+- CRITICAL UNIQUENESS RULE: Do NOT repeat, rephrase, or use the same numbers/structure as ANY of these already-uploaded questions:
+{recent_avoid}
+- Visual Formatting Rule for "question_text" and "steps_text":
+  * Use clean math symbols (+, -, ×, ÷, =) and use "[ ? ]" as the blank gap for the unknown value!
+  * Keep "question_text" crisp and visual (e.g., "Solve for [ ? ]:\\n\\n( 64 × 25 ) ÷ 16 = [ ? ]").
+  * Keep "steps_text" to strictly 3 short equation lines using +, -, ×, ÷, = (max 8 words per line).
 Return JSON with these exact keys:
 - "video_title": catchy YouTube title under 65 chars (NO #Shorts tag)
 - "thumb_hook": punchy 3-word thumbnail hook in ALL CAPS (e.g., "99% FAIL LEVEL 5")
-- "thumb_math": short 1-line math teaser for thumbnail (e.g., "8 ÷ 2(2+2) = ?")
-- "intro_hook": bold on-screen hook (e.g., "CAN YOU BEAT ALL 5 LEVELS?")
-- "intro_voice": energetic 8-second welcome explaining the 5 escalating rounds
+- "thumb_math": short 1-line equation teaser with [ ? ] (e.g., "64 × 25 ÷ 16 = [ ? ]")
+- "intro_hook": bold on-screen hook (e.g., "CAN YOU SOLVE ALL 5?")
+- "intro_voice": energetic 7-second welcome explaining the 5 escalating rounds
 - "rounds": list of 5 objects, each with:
   * "round_num": 1 to 5
   * "difficulty": "WARM-UP", "EASY", "MEDIUM", "HARD", or "GENIUS BOSS"
   * "timer_seconds": 15, 20, 30, 45, or 60
-  * "question_text": clean math riddle text for screen
-  * "question_voice": spoken reading of the round number, riddle, and timer duration
-  * "steps_text": 3 short lines explaining the step-by-step trick
-  * "answer_text": bold final answer (e.g., "Answer: 42")
-  * "solution_voice": spoken reveal of the trick and final answer
-- "outro_voice": energetic 8-second outro asking viewers to comment their score out of 5 and subscribe"""
+  * "question_text": clean visual equation with +, -, ×, ÷, = and [ ? ]
+  * "question_voice": natural spoken reading of the round number, equation, and timer seconds
+  * "steps_text": 3 short equation lines showing the mental shortcut
+  * "answer_text": bold final answer (e.g., "[ ? ] = 100")
+  * "solution_voice": spoken reveal of the mental trick and final answer
+- "outro_voice": energetic 7-second outro asking viewers to comment their score out of 5 and subscribe"""
 
 models_to_try = ["gemini-3.8-flash", "gemini-3.5-flash-lite"]
 response = None
@@ -81,9 +114,12 @@ if not response or not response.text:
     raise RuntimeError("All Gemini models failed or timed out.")
 
 data = json.loads(response.text)
+
 # 2. Sequential Voiceover Generator with gTTS Fallback
 async def create_audio(text, filename):
-    clean_text = str(text).strip() or "Let's solve this math challenge!"
+    clean_text = str(text).replace("[ ? ]", "what number").replace("[?]", "what number").strip()
+    if not clean_text:
+        clean_text = "Let's solve this math challenge!"
     for voice in ["en-US-GuyNeural", "en-US-ChristopherNeural", "en-US-JennyNeural"]:
         try:
             communicate = edge_tts.Communicate(clean_text, voice)
@@ -123,14 +159,16 @@ def get_tick_clip():
     return AudioArrayClip(np.column_stack((wave, wave)), fps=sr)
 
 tick_sound = get_tick_clip()
+
+def format_math_symbols(text):
+    if isinstance(text, list):
+        text = "\n".join(str(item) for item in text)
+    return str(text).replace(" * ", " × ").replace(" / ", " ÷ ")
+
 # 3. Build Widescreen 1920x1080 Base Slides (Centered Inside Glowing Cyan Box)
 def build_wide_slide(output_name, badge, main_text, highlight="", badge_color="#FFD700", compact=False):
-    if isinstance(main_text, list):
-        main_text = "\n".join(str(item) for item in main_text)
-    if isinstance(highlight, list):
-        highlight = "\n".join(str(item) for item in highlight)
-    main_text = str(main_text)
-    highlight = str(highlight)
+    main_text = format_math_symbols(main_text)
+    highlight = format_math_symbols(highlight)
 
     img = Image.open("bg_long.png").convert("RGBA").resize((1920, 1080))
     draw = ImageDraw.Draw(img)
@@ -139,31 +177,31 @@ def build_wide_slide(output_name, badge, main_text, highlight="", badge_color="#
     if not os.path.exists(font_path):
         font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 
-    body_size = 42 if compact else 52
+    body_size = 44 if compact else 56
     wrap_width = 32 if compact else 26
-    line_spacing = 16 if compact else 22
+    line_spacing = 18 if compact else 24
 
     if os.path.exists(font_path):
         font_badge = ImageFont.truetype(font_path, 42)
         font_body = ImageFont.truetype(font_path, body_size)
-        font_hl = ImageFont.truetype(font_path, 60)
+        font_hl = ImageFont.truetype(font_path, 64)
     else:
         font_badge = ImageFont.load_default(size=42)
         font_body = ImageFont.load_default(size=body_size)
-        font_hl = ImageFont.load_default(size=60)
+        font_hl = ImageFont.load_default(size=64)
 
-    # Centered inside the glowing cyan rectangle (x=615) and below its top border (y=305)
     board_center_x = 615
     draw.multiline_text((board_center_x, 305), badge, fill=badge_color, font=font_badge, anchor="ma", align="center", spacing=10)
 
     wrapped_body = "\n".join([textwrap.fill(line, width=wrap_width) for line in main_text.split("\n")])
-    draw.multiline_text((board_center_x, 415), wrapped_body, fill="white", font=font_body, anchor="ma", align="center", spacing=line_spacing)
+    draw.multiline_text((board_center_x, 420), wrapped_body, fill="white", font=font_body, anchor="ma", align="center", spacing=line_spacing)
 
     if highlight:
         wrapped_hl = "\n".join(textwrap.wrap(highlight, width=24))
         draw.multiline_text((board_center_x, 795), wrapped_hl, fill="#00FFCC", font=font_hl, anchor="ma", align="center", spacing=12)
 
     img.save(output_name)
+
 # 4. Widescreen Lip-Sync Mascot Overlay (Bottom-Right Corner)
 char_closed = Image.open("char_closed.png").convert("RGBA").resize((480, 480))
 char_open = Image.open("char_open.png").convert("RGBA").resize((480, 480))
@@ -210,7 +248,7 @@ intro_clip = make_talking_scene("l_intro.png", "long_intro.mp3")
 clips.append(intro_clip)
 elapsed += intro_clip.duration
 
-valid_timers = [15, 20, 30, 45, 60]
+valid_timers =
 
 for idx, rnd in enumerate(data["rounds"], start=1):
     mins = int(elapsed // 60)
@@ -245,6 +283,7 @@ for idx, rnd in enumerate(data["rounds"], start=1):
 build_wide_slide("l_outro.png", "CHALLENGE COMPLETE!", "What was your score out of 5?\nComment below & subscribe for weekly quizzes!", "MATH MINUTE MARVELS", "#F472B6")
 outro_clip = make_talking_scene("l_outro.png", "long_outro.mp3")
 clips.append(outro_clip)
+
 # 6. Render Widescreen Video Fast (preset="ultrafast")
 final_video = concatenate_videoclips(clips, method="compose")
 
@@ -269,7 +308,7 @@ def create_long_thumbnail(hook_line, teaser_math, output_path="thumb_long.jpg"):
         font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 
     font_top = ImageFont.truetype(font_path, 56) if os.path.exists(font_path) else ImageFont.load_default(size=56)
-    font_big = ImageFont.truetype(font_path, 82) if os.path.exists(font_path) else ImageFont.load_default(size=82)
+    font_big = ImageFont.truetype(font_path, 78) if os.path.exists(font_path) else ImageFont.load_default(size=78)
 
     mascot_img = Image.open("char_think.png" if os.path.exists("char_think.png") else "char_closed.png").convert("RGBA").resize((430, 430))
     thumb.paste(mascot_img, (830, 260), mascot_img)
@@ -277,13 +316,14 @@ def create_long_thumbnail(hook_line, teaser_math, output_path="thumb_long.jpg"):
     wrapped_hook = "\n".join(textwrap.wrap(str(hook_line).upper(), width=15))
     draw.multiline_text((410, 220), wrapped_hook, fill="#FFD700", font=font_top, anchor="ma", align="center", spacing=10)
 
-    wrapped_math = "\n".join(textwrap.wrap(str(teaser_math), width=14))
+    clean_teaser = format_math_symbols(teaser_math)
+    wrapped_math = "\n".join(textwrap.wrap(clean_teaser, width=15))
     draw.multiline_text((410, 415), wrapped_math, fill="#00FFCC", font=font_big, anchor="ma", align="center", spacing=12)
 
     thumb.convert("RGB").save(output_path, "JPEG", quality=92)
     return output_path
 
-# 7. Upload Publicly to YouTube with Auto-Generated Chapters & Custom Thumbnail
+# 7. Upload Publicly to YouTube, Attach Thumbnail & Save Question History
 chapter_text = "\n".join(chapters)
 description = (
     f"Test your brainpower with 5 escalating mental math riddles on Math Minute Marvels!\n\n"
@@ -325,3 +365,8 @@ try:
     print(f"Uploaded custom Long Video thumbnail for {video_id}!", flush=True)
 except Exception as e:
     print(f"Long Video thumbnail skipped: {e}", flush=True)
+
+for rnd in data["rounds"]:
+    past_questions.append(str(rnd["question_text"]).strip())
+with open(history_file, "w", encoding="utf-8") as f:
+    json.dump(past_questions[-150:], f, indent=2)
