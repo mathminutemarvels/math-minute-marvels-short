@@ -89,7 +89,7 @@ Return JSON with these exact keys:
   * "solution_voice": spoken reveal of the mental trick and final answer
 - "outro_voice": energetic 7-second outro asking viewers to comment their score out of 5 and subscribe"""
 
-models_to_try = ["gemini-3.8-flash", "gemini-3.5-flash-lite"]
+models_to_try = ["gemini-3.8-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite"]
 response = None
 
 for model_name in models_to_try:
@@ -105,8 +105,9 @@ for model_name in models_to_try:
                 print(f"Success with {model_name}!", flush=True)
                 break
         except Exception as e:
-            print(f"{model_name} failed ({type(e).__name__}): {e}. Retrying in 5s...", flush=True)
-            time.sleep(5)
+            wait_sec = 15 * (attempt + 1)
+            print(f"{model_name} failed ({type(e).__name__}): {e}. Retrying in {wait_sec}s...", flush=True)
+            time.sleep(wait_sec)
     if response and response.text:
         break
 
