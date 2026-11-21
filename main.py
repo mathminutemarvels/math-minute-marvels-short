@@ -486,20 +486,23 @@ def get_canvas_spec(mode: str) -> dict:
     }
 
 
-def prepare_base_background(spec: dict, theme: dict) -> Image.Image:
+def prepare_base_background(mode: str, spec: dict, theme: dict) -> Image.Image:
     """
-    Loads your uploaded background image (bg.png / background.jpg / etc.),
-    scales & center-crops it to fit the canvas, and applies a dark readability tint.
+    Loads bg.png for Shorts or bg_long.png for Long videos, scales/crops to fit,
+    and blends with a subtle dark theme tint so text and neon cards stay crisp.
     """
     w, h = spec["width"], spec["height"]
     tint_layer = Image.new("RGB", (w, h), theme["bg"])
 
-    found_bg = next((p for p in BG_CANDIDATES if os.path.exists(p)), None)
+    primary = "bg.png" if mode == "short" else "bg_long.png"
+    fallback = "bg_long.png" if mode == "short" else "bg.png"
+    found_bg = next((p for p in [primary, fallback] if os.path.exists(p)), None)
+
     if not found_bg:
-        print("[Background] No custom bg image found; using solid theme background.")
+        print("[Background] No bg.png / bg_long.png found; using solid theme background.")
         return tint_layer
 
-    print(f"[Background] Loaded custom background image: {found_bg}")
+    print(f"[Background] Loaded {found_bg} for mode={mode}")
     raw = Image.open(found_bg).convert("RGB")
     scale = max(w / raw.width, h / raw.height)
     new_w, new_h = int(raw.width * scale), int(raw.height * scale)
@@ -509,47 +512,23 @@ def prepare_base_background(spec: dict, theme: dict) -> Image.Image:
     top = (new_h - h) // 2
     cropped = resized.crop((left, top, left + w, top + h))
 
-    # Blend 45% custom background + 55% dark theme tint so white/neon text pops clearly
-    return Image.blend(cropped, tint_layer, alpha=0.55)
-
-
-def _blend_rgb(fg: tuple, bg: tuple, alpha: float) -> tuple:
-    r0, g0, b0 = fg
-    r1, g1, b1 = bg
-    return (
-        int(r0 * alpha + r1 * (1.0 - alpha)),
-        int(g0 * alpha + g1 * (1.0 - alpha)),
-        int(b0 * alpha + b1 * (1.0 - alpha)),
-    )
-
-
-def draw_floating_math_symbols(canvas: Image.Image, spec: dict, theme: dict, t_sec: float):
-    """Renders drifting %, +, =, ×, ÷, ! operators across the background."""
-    w, h = spec["width"], spec["height"]
-    draw = ImageDraw.Draw(canvas)
-
-    count = 16
-    for i in range(count):
-        sym = MATH_SYMBOLS[i % len(MATH_SYMBOLS)]
-        col_rgb = theme["accent"] if i % 2 == 0 else theme["highlight"]
-        x_base = int(((i * 0.6180339) % 1.0) * (w - 100)) + 50
-        x_wobble = int(math.sin(t_sec * 1.6 + i * 1.3) * 28)
-        speed = 42 + (i % 4) * 14
-        y_pos = int((h - ((t_sec * speed + i * (h / count)) % (h + 120))) - 60)
-
-        alpha = 0.22 + 0.10 * math.sin(t_sec * 2.5 + i)
-        blended_col = _blend_rgb(col_rgb, theme["bg"], alpha)
-        draw.text((x_base + x_wobble, y_pos), sym, font=spec["font_symbol_bg"], fill=blended_col)
+    # Blend 55% custom background + 45% dark theme tint for high contrast
+    return Image.blend(cropped, tint_layer, alpha=0.45)
 
 
 def load_mascot_sprites(target_size: int) -> dict:
-    """Loads char_open.png, char_closed.png, and char_think.png with graceful fallback."""
+    """Loads all 5 uploaded character sprites: open, half, closed, blink, think."""
     sprites = {}
-    for key, filename in [("open", "char_open.png"), ("closed", "char_closed.png"), ("think", "char_think.png")]:
-        candidates = [filename, os.path.join("assets", filename)]
-        found = next((p for p in candidates if os.path.exists(p)), None)
-        if found:
-            img = Image.open(found).convert("RGBA")
+    files = {
+        "open": "char_open.png",
+        "half": "char_half.png",
+        "closed": "char_closed.png",
+        "blink": "char_blink.png",
+        "think": "char_think.png",
+    }
+    for key, filename in files.items():
+        if os.path.exists(filename):
+            img = Image.open(filename).convert("RGBA")
             img.thumbnail((target_size, target_size), Image.Resampling.LANCZOS)
             sprites[key] = img
         else:
@@ -569,23 +548,36 @@ def paste_mascot_with_symbols(
     theme: dict,
 ):
     """
-    Composites the 430px mascot with audio-synced mouth movement (closes on pauses!),
-    thinking pose during countdown, and orbiting %, +, =, ×, ÷, ! symbols.
+    Composites the 430px mascot using all 5 sprites:
+    - Smooth 3-frame talking cycle (open -> half -> closed) ONLY when voice is active
+    - Natural eye-blink (char_blink.png) every ~3.5 seconds during pauses
+    - Thinking pose (char_think.png) during countdown
+    - Orbiting %, +, =, ×, ÷, ! operators
     """
     if stage == "countdown":
         pose = "think"
         bounce_y = int(math.sin(t_sec * 3.2) * 8)
     elif is_speaking_now:
-        mouth_open = int(t_sec * 8.0) % 2 == 0
-        pose = "open" if (mouth_open or sprites.get("closed") is None) else "closed"
-        bounce_y = -int(abs(math.sin(t_sec * 8.0)) * 11)
+        cycle = int(t_sec * 10.0) % 4
+        if cycle == 0:
+            pose = "open"
+        elif cycle in (1, 3):
+            pose = "half" if sprites.get("half") is not None else "open"
+        else:
+            pose = "closed"
+        bounce_y = -int(abs(math.sin(t_sec * 8.0)) * 10)
     else:
-        pose = "closed" if sprites.get("closed") is not None else "open"
-        bounce_y = int(math.sin(t_sec * 2.5) * 4)
+        # Closed mouth during pauses, with a quick natural blink every 3.5 seconds
+        blink_phase = t_sec % 3.5
+        if blink_phase < 0.16 and sprites.get("blink") is not None:
+            pose = "blink"
+        else:
+            pose = "closed"
+        bounce_y = int(math.sin(t_sec * 2.4) * 4)
 
     draw = ImageDraw.Draw(canvas)
-    orbit_radius_x = int(spec["mascot_size"] * 0.68)
-    orbit_radius_y = int(spec["mascot_size"] * 0.22)
+    orbit_radius_x = int(spec["mascot_size"] * 0.66)
+    orbit_radius_y = int(spec["mascot_size"] * 0.20)
     for idx, sym in enumerate(MATH_SYMBOLS):
         angle = t_sec * 1.9 + (idx * (2 * math.pi / len(MATH_SYMBOLS)))
         sx = int(cx + math.cos(angle) * orbit_radius_x)
@@ -593,7 +585,7 @@ def paste_mascot_with_symbols(
         sym_color = theme["highlight"] if idx % 2 == 0 else theme["accent"]
         draw.text((sx - 14, sy - 20), sym, font=spec["font_symbol_orbit"], fill=sym_color)
 
-    sprite = sprites.get(pose) or sprites.get("open")
+    sprite = sprites.get(pose) or sprites.get("closed") or sprites.get("open")
     if sprite is not None:
         px = int(cx - sprite.width // 2)
         py = int(cy - sprite.height // 2 + bounce_y)
@@ -677,12 +669,28 @@ def draw_countdown_bar(
         )
 
 # ==============================================================================
-# PART 13 OF 20: ANIMATED SCENE COMPOSITOR (SYMBOLS, STEP REVEAL & MASCOT)
+# PART 13 OF 20: SAFE-ZONE COMPOSITOR (BG IMAGE, AUTO-SIZED STEPS & LIP-SYNC)
 # ==============================================================================
 def _split_explanation_steps(explanation: str) -> list:
-    """Splits explanation text into 2-4 clean progressive reveal lines."""
-    parts = [s.strip() for s in re.split(r"(?<=[.!])\s+", str(explanation).strip()) if s.strip()]
+    """Splits explanation text cleanly on ., !, or ? into 2-4 crisp steps."""
+    parts = [s.strip() for s in re.split(r"(?<=[.!?])\s+", str(explanation).strip()) if s.strip()]
     return parts if parts else [str(explanation).strip()]
+
+
+def _measure_wrapped_lines(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont, max_width: int) -> list:
+    words = str(text).split()
+    lines, current = [], []
+    for word in words:
+        candidate = " ".join(current + [word])
+        x0, y0, x1, y1 = draw.textbbox((0, 0), candidate, font=font)
+        if (x1 - x0) <= max_width or not current:
+            current.append(word)
+        else:
+            lines.append(" ".join(current))
+            current = [word]
+    if current:
+        lines.append(" ".join(current))
+    return lines
 
 
 def render_puzzle_frame(
@@ -695,16 +703,20 @@ def render_puzzle_frame(
     spec: dict,
     theme: dict,
     sprites: dict,
+    base_bg: Image.Image = None,
+    is_speaking_now: bool = False,
 ) -> np.ndarray:
-    """Builds one RGB numpy frame at local puzzle timestamp t_sec with dynamic motion."""
+    """Builds one RGB frame with bg.png/bg_long.png, Shorts safe zones & auto-sized steps."""
     w, h, pad = spec["width"], spec["height"], spec["pad"]
-    canvas = Image.new("RGB", (w, h), theme["bg"])
+    canvas = base_bg.copy() if base_bg is not None else Image.new("RGB", (w, h), theme["bg"])
 
-    # Layer 1: Drifting + = × ÷ ! background symbols
     draw_floating_math_symbols(canvas, spec, theme, t_sec)
     draw = ImageDraw.Draw(canvas)
 
-    # Stage boundary timestamps
+    # YouTube Shorts UI safe margins (clears top icons and bottom title/channel bar)
+    top_margin = 150 if mode == "short" else 60
+    bottom_margin = 260 if mode == "short" else 55
+
     t_hook_end = audio_info["hook_dur"] + 0.35
     t_q_end = t_hook_end + audio_info["question_dur"] + 0.35
     t_timer_end = t_q_end + audio_info["final_timer"]
@@ -726,41 +738,37 @@ def render_puzzle_frame(
         stage = "outro"
         stage_elapsed = t_sec - t_exp_end
 
-    # Smooth ease-out slide-in offset for the first 0.28s of each stage
-    ease = min(1.0, stage_elapsed / 0.28)
-    slide_y = int((1.0 - (1.0 - ease) ** 3) * 0 + ((1.0 - ease) ** 3) * 42)
+    ease = min(1.0, stage_elapsed / 0.25)
+    slide_y = int(((1.0 - ease) ** 3) * 28)
 
-    # Top header pill: Topic + Difficulty + Progress
+    # Top header pill (positioned safely below YouTube's top Shorts icons)
     label_prefix = f"PUZZLE {puzzle_num}/{total_puzzles}  •  " if total_puzzles > 1 else ""
     header_text = f"{label_prefix}{puzzle['topic'].upper()}  •  {puzzle['difficulty']}"
-    draw_rounded_card(draw, (pad, pad, w - pad, pad + 74), radius=24, fill=theme["card"], outline=theme["accent"], width=3)
-    draw_centered_multiline(draw, header_text, spec["font_badge"], w // 2, pad + 18, w - pad * 2 - 40, theme["accent"])
+    draw_rounded_card(draw, (pad, top_margin, w - pad, top_margin + 68), radius=24, fill=theme["card"], outline=theme["accent"], width=3)
+    draw_centered_multiline(draw, header_text, spec["font_badge"], w // 2, top_margin + 16, w - pad * 2 - 40, theme["accent"])
 
-    # Main content card (leaves generous space at bottom for larger animated mascot)
-    card_top = pad + 102 + slide_y
-    card_bottom = h - pad - (395 if mode == "short" else 310)
-    draw_rounded_card(draw, (pad, card_top, w - pad, card_bottom), radius=36, fill=theme["card"], outline=theme["accent"], width=3)
+    # Main content card (leaves generous space above bottom safe zone for 430px mascot)
+    mascot_band_h = 370 if mode == "short" else 280
+    card_top = top_margin + 88 + slide_y
+    card_bottom = h - bottom_margin - mascot_band_h
+    draw_rounded_card(draw, (pad, card_top, w - pad, card_bottom), radius=34, fill=theme["card"], outline=theme["accent"], width=3)
 
-    inner_w = w - pad * 2 - 80
+    inner_w = w - pad * 2 - 64
     cx = w // 2
 
     if stage == "hook":
-        draw_centered_multiline(draw, "⚡ QUICK BRAIN CHECK ⚡", spec["font_badge"], cx, card_top + 90, inner_w, theme["highlight"])
-        draw_centered_multiline(draw, puzzle["hook"], spec["font_hook"], cx, card_top + 195, inner_w, theme["text"])
-        draw_centered_multiline(draw, "+   =   ×   ÷   !", spec["font_hook"], cx, card_bottom - 140, inner_w, theme["accent"])
+        draw_centered_multiline(draw, "⚡ QUICK BRAIN CHECK ⚡", spec["font_badge"], cx, card_top + 70, inner_w, theme["highlight"])
+        draw_centered_multiline(draw, puzzle["hook"], spec["font_hook"], cx, card_top + 165, inner_w, theme["text"])
+        draw_centered_multiline(draw, "%   +   =   ×   ÷   !", spec["font_hook"], cx, card_bottom - 110, inner_w, theme["accent"])
 
     else:
-        # Question box highlighted at top of main card
-        q_box_bottom = card_top + (225 if mode == "short" else 175)
-        draw_rounded_card(
-            draw,
-            (pad + 28, card_top + 28, w - pad - 28, q_box_bottom),
-            radius=24,
-            fill=theme["bg"],
-            outline=theme["muted"],
-            width=2,
-        )
-        draw_centered_multiline(draw, puzzle["question"], spec["font_question"], cx, card_top + 58, inner_w - 30, theme["text"])
+        # Auto-sized Question Box
+        q_lines = _measure_wrapped_lines(draw, puzzle["question"], spec["font_question"], inner_w - 36)
+        q_box_h = max(120, len(q_lines) * 80 + 44)
+        q_box_top = card_top + 22
+        q_box_bottom = q_box_top + q_box_h
+        draw_rounded_card(draw, (pad + 22, q_box_top, w - pad - 22, q_box_bottom), radius=22, fill=theme["bg"], outline=theme["muted"], width=2)
+        draw_centered_multiline(draw, puzzle["question"], spec["font_question"], cx, q_box_top + 22, inner_w - 36, theme["text"])
 
         if stage == "countdown":
             rem = max(0.0, t_timer_end - t_sec)
@@ -769,72 +777,54 @@ def render_puzzle_frame(
             urgent = rem <= 5.0
             ring_color = theme["highlight"] if urgent else theme["accent"]
 
-            # Pulsing circular timer ring in center of card
-            ring_cy = (q_box_bottom + card_bottom) // 2 - 30
-            ring_r = 155 if mode == "short" else 120
-            pulse_r = ring_r + (int(abs(math.sin(t_sec * 6.0)) * 12) if urgent else 0)
+            ring_cy = (q_box_bottom + card_bottom - 70) // 2
+            ring_r = 135 if mode == "short" else 105
+            pulse_r = ring_r + (int(abs(math.sin(t_sec * 6.0)) * 10) if urgent else 0)
             bbox = (cx - pulse_r, ring_cy - pulse_r, cx + pulse_r, ring_cy + pulse_r)
-            draw.ellipse(bbox, outline=theme["bg"], width=16)
-            draw.arc(bbox, start=-90, end=-90 + int(360 * ratio), fill=ring_color, width=16)
+            draw.ellipse(bbox, outline=theme["bg"], width=15)
+            draw.arc(bbox, start=-90, end=-90 + int(360 * ratio), fill=ring_color, width=15)
 
-            sec_display = f"{int(math.ceil(rem))}s"
-            draw_centered_multiline(draw, sec_display, spec["font_timer"], cx, ring_cy - 68, inner_w, ring_color)
-            draw_countdown_bar(draw, cx, card_bottom - 75, int(inner_w * 0.85), 26, rem, total_t, theme)
+            draw_centered_multiline(draw, f"{int(math.ceil(rem))}s", spec["font_timer"], cx, ring_cy - 62, inner_w, ring_color)
+            draw_countdown_bar(draw, cx, card_bottom - 64, int(inner_w * 0.85), 24, rem, total_t, theme)
 
         elif stage in ("reveal", "outro"):
-            # Answer banner pill
-            ans_top = q_box_bottom + 24
-            ans_bottom = ans_top + (125 if mode == "short" else 100)
-            draw_rounded_card(
-                draw,
-                (pad + 28, ans_top, w - pad - 28, ans_bottom),
-                radius=24,
-                fill=theme["bg"],
-                outline=theme["accent"],
-                width=3,
-            )
-            draw_centered_multiline(draw, f"ANSWER: {puzzle['answer']}", spec["font_answer"], cx, ans_top + 20, inner_w - 30, theme["accent"])
+            ans_top = q_box_bottom + 18
+            ans_bottom = ans_top + (106 if mode == "short" else 88)
+            draw_rounded_card(draw, (pad + 22, ans_top, w - pad - 22, ans_bottom), radius=22, fill=theme["bg"], outline=theme["accent"], width=3)
+            draw_centered_multiline(draw, f"ANSWER: {puzzle['answer']}", spec["font_answer"], cx, ans_top + 14, inner_w - 36, theme["accent"])
 
-            # Progressive sentence-by-sentence step reveal synced to explanation_dur
             steps = _split_explanation_steps(puzzle["explanation"])
             exp_progress = min(0.999, max(0.0, stage_elapsed / max(0.5, audio_info["explanation_dur"])))
             visible_count = len(steps) if stage == "outro" else min(len(steps), int(exp_progress * len(steps)) + 1)
 
-            step_y = ans_bottom + 28
+            step_font = load_font(35 if mode == "short" else 33)
+            step_y = ans_bottom + 18
+            outro_reserve = 72 if (stage == "outro" and puzzle.get("outro")) else 16
+
             for s_idx in range(visible_count):
+                step_label = f"Step {s_idx + 1}: {steps[s_idx]}"
+                wrapped = _measure_wrapped_lines(draw, step_label, step_font, inner_w - 52)
+                dyn_box_h = len(wrapped) * 44 + 32
+
+                if step_y + dyn_box_h > card_bottom - outro_reserve:
+                    break
+
                 is_active = (stage == "reveal") and (s_idx == visible_count - 1)
                 step_bg = theme["bg"] if is_active else theme["card"]
                 step_border = theme["highlight"] if is_active else theme["muted"]
                 step_text_col = theme["highlight"] if is_active else theme["text"]
 
-                box_h = 145 if mode == "short" else 105
-                if step_y + box_h <= card_bottom - 20:
-                    draw_rounded_card(
-                        draw,
-                        (pad + 28, step_y, w - pad - 28, step_y + box_h),
-                        radius=20,
-                        fill=step_bg,
-                        outline=step_border,
-                        width=2,
-                    )
-                    draw_centered_multiline(
-                        draw,
-                        f"Step {s_idx + 1}: {steps[s_idx]}",
-                        spec["font_body"],
-                        cx,
-                        step_y + 22,
-                        inner_w - 50,
-                        step_text_col,
-                    )
-                    step_y += box_h + 18
+                draw_rounded_card(draw, (pad + 22, step_y, w - pad - 22, step_y + dyn_box_h), radius=18, fill=step_bg, outline=step_border, width=2)
+                draw_centered_multiline(draw, step_label, step_font, cx, step_y + 15, inner_w - 52, step_text_col, line_spacing=9)
+                step_y += dyn_box_h + 12
 
             if stage == "outro" and puzzle.get("outro"):
-                draw_centered_multiline(draw, puzzle["outro"], spec["font_badge"], cx, card_bottom - 65, inner_w, theme["highlight"])
+                draw_centered_multiline(draw, puzzle["outro"], spec["font_badge"], cx, card_bottom - 54, inner_w, theme["highlight"])
 
-    # Bottom animated mascot + orbiting + = × ÷ ! symbols + handle
-    mascot_y = card_bottom + (195 if mode == "short" else 155)
-    paste_mascot_with_symbols(canvas, sprites, stage, cx, mascot_y, t_sec, spec, theme)
-    draw_centered_multiline(draw, "@MathMinuteMarvels", spec["font_badge"], cx, h - pad - 38, inner_w, theme["muted"])
+    # Large 430px Mascot & handle placed safely above YouTube's bottom Shorts bar
+    mascot_y = card_bottom + (175 if mode == "short" else 135)
+    paste_mascot_with_symbols(canvas, sprites, stage, is_speaking_now, cx, mascot_y, t_sec, spec, theme)
+    draw_centered_multiline(draw, "@MathMinuteMarvels", spec["font_badge"], cx, card_bottom + mascot_band_h - 38, inner_w, theme["muted"])
 
     return np.array(canvas)
 
@@ -851,8 +841,8 @@ except ImportError:
 
 def extract_speech_activity(audio_info: dict, total_dur: float, fps: int = 24) -> np.ndarray:
     """
-    Builds a boolean array (one entry per frame at `fps`) that is True ONLY
-    when the narrator's voiceover is actively speaking (silent during pauses & countdown).
+    Returns a per-frame boolean array that is True ONLY when the narrator's voice
+    is actively speaking (closes mascot mouth during every silent pause).
     """
     n_frames = max(1, int(math.ceil(total_dur * fps)) + 2)
     activity = np.zeros(n_frames, dtype=bool)
@@ -876,11 +866,7 @@ def extract_speech_activity(audio_info: dict, total_dur: float, fps: int = 24) -
         clip = AudioFileClip(mp3_path)
         try:
             arr = clip.to_soundarray(fps=2400)
-            if arr.ndim > 1:
-                arr = np.mean(np.abs(arr), axis=1)
-            else:
-                arr = np.abs(arr)
-
+            arr = np.mean(np.abs(arr), axis=1) if arr.ndim > 1 else np.abs(arr)
             samples_per_frame = max(1, int(2400 / fps))
             seg_frames = len(arr) // samples_per_frame
             for f_idx in range(seg_frames):
@@ -904,8 +890,9 @@ def build_puzzle_video_clip(
     spec: dict,
     theme: dict,
     sprites: dict,
+    base_bg: Image.Image = None,
 ) -> VideoClip:
-    """Creates a 24 FPS VideoClip with real audio-synced mascot lip movement."""
+    """Creates a 24 FPS VideoClip with custom background and audio-synced lip movement."""
     fps = 24
     total_dur = (
         audio_info["hook_dur"]
@@ -932,6 +919,7 @@ def build_puzzle_video_clip(
             spec=spec,
             theme=theme,
             sprites=sprites,
+            base_bg=base_bg,
             is_speaking_now=is_speaking_now,
         )
 
@@ -1023,6 +1011,7 @@ def render_complete_video(puzzles: list, mode: str, theme: dict, voice: str) -> 
 
     spec = get_canvas_spec(mode)
     sprites = load_mascot_sprites(spec["mascot_size"])
+    base_bg = prepare_base_background(mode, spec, theme)
     tick_path, chime_path = ensure_sfx_assets("assets")
 
     segment_clips = []
@@ -1050,7 +1039,9 @@ def render_complete_video(puzzles: list, mode: str, theme: dict, voice: str) -> 
             spec=spec,
             theme=theme,
             sprites=sprites,
+            base_bg=base_bg,
         )
+
         aclip, opened_handles = build_puzzle_audio_track(audio_info, tick_path, chime_path)
         all_opened_audio.extend(opened_handles)
         segment_clips.append(_set_clip_audio(vclip, aclip))
