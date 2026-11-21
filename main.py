@@ -515,6 +515,33 @@ def prepare_base_background(mode: str, spec: dict, theme: dict) -> Image.Image:
     # Blend 55% custom background + 45% dark theme tint for high contrast
     return Image.blend(cropped, tint_layer, alpha=0.45)
 
+def _blend_rgb(fg: tuple, bg: tuple, alpha: float) -> tuple:
+    r0, g0, b0 = fg
+    r1, g1, b1 = bg
+    return (
+        int(r0 * alpha + r1 * (1.0 - alpha)),
+        int(g0 * alpha + g1 * (1.0 - alpha)),
+        int(b0 * alpha + b1 * (1.0 - alpha)),
+    )
+
+
+def draw_floating_math_symbols(canvas: Image.Image, spec: dict, theme: dict, t_sec: float):
+    """Renders drifting %, +, =, ×, ÷, ! operators across the background."""
+    w, h = spec["width"], spec["height"]
+    draw = ImageDraw.Draw(canvas)
+
+    count = 16
+    for i in range(count):
+        sym = MATH_SYMBOLS[i % len(MATH_SYMBOLS)]
+        col_rgb = theme["accent"] if i % 2 == 0 else theme["highlight"]
+        x_base = int(((i * 0.6180339) % 1.0) * (w - 100)) + 50
+        x_wobble = int(math.sin(t_sec * 1.6 + i * 1.3) * 28)
+        speed = 42 + (i % 4) * 14
+        y_pos = int((h - ((t_sec * speed + i * (h / count)) % (h + 120))) - 60)
+
+        alpha = 0.22 + 0.10 * math.sin(t_sec * 2.5 + i)
+        blended_col = _blend_rgb(col_rgb, theme["bg"], alpha)
+        draw.text((x_base + x_wobble, y_pos), sym, font=spec["font_symbol_bg"], fill=blended_col)
 
 def load_mascot_sprites(target_size: int) -> dict:
     """Loads all 5 uploaded character sprites: open, half, closed, blink, think."""
