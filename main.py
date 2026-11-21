@@ -513,7 +513,7 @@ def prepare_base_background(mode: str, spec: dict, theme: dict) -> Image.Image:
     cropped = resized.crop((left, top, left + w, top + h))
 
     # Blend 55% custom background + 45% dark theme tint for high contrast
-    return Image.blend(cropped, tint_layer, alpha=0.45)
+    return Image.blend(cropped, tint_layer, alpha=0.22)
 
 def _blend_rgb(fg: tuple, bg: tuple, alpha: float) -> tuple:
     r0, g0, b0 = fg
@@ -624,10 +624,31 @@ def paste_mascot_with_symbols(
 # ==============================================================================
 # PART 11 OF 20: ROUNDED CARD & CENTERED MULTI-LINE TEXT RENDERER
 # ==============================================================================
-def draw_rounded_card(draw: ImageDraw.ImageDraw, box: tuple, radius: int, fill: tuple, outline: tuple, width: int = 3):
-    """Draws a rounded container card with a crisp neon border."""
-    draw.rounded_rectangle(box, radius=radius, fill=fill, outline=outline, width=width)
-
+def draw_rounded_card(
+    canvas_or_draw,
+    box: tuple,
+    radius: int,
+    fill: tuple,
+    outline: tuple,
+    width: int = 3,
+    fill_alpha: int = 185,
+):
+    """Draws a translucent rounded card so background artwork & logos remain visible."""
+    if isinstance(canvas_or_draw, Image.Image):
+        x0, y0, x1, y1 = [int(v) for v in box]
+        cw, ch = max(1, x1 - x0), max(1, y1 - y0)
+        overlay = Image.new("RGBA", (cw, ch), (0, 0, 0, 0))
+        odraw = ImageDraw.Draw(overlay)
+        odraw.rounded_rectangle(
+            (0, 0, cw - 1, ch - 1),
+            radius=radius,
+            fill=(fill[0], fill[1], fill[2], fill_alpha),
+            outline=(outline[0], outline[1], outline[2], 255),
+            width=width,
+        )
+        canvas_or_draw.paste(overlay, (x0, y0), overlay)
+    else:
+        canvas_or_draw.rounded_rectangle(box, radius=radius, fill=fill, outline=outline, width=width)
 
 def draw_centered_multiline(
     draw: ImageDraw.ImageDraw,
@@ -778,7 +799,7 @@ def render_puzzle_frame(
     mascot_band_h = 370 if mode == "short" else 280
     card_top = top_margin + 88 + slide_y
     card_bottom = h - bottom_margin - mascot_band_h
-    draw_rounded_card(draw, (pad, card_top, w - pad, card_bottom), radius=34, fill=theme["card"], outline=theme["accent"], width=3)
+    draw_rounded_card(canvas, (pad, card_top, w - pad, card_bottom), radius=34, fill=theme["card"], outline=theme["accent"], width=3, fill_alpha=175)
 
     inner_w = w - pad * 2 - 64
     cx = w // 2
