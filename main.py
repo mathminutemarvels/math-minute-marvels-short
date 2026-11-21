@@ -192,7 +192,10 @@ def generate_puzzles(mode: str = "short", max_retries: int = 4) -> list:
     if not api_key:
         raise EnvironmentError("GEMINI_API_KEY environment variable is missing.")
 
-    client = genai.Client(api_key=api_key)
+    client = genai.Client(
+        api_key=api_key,
+        http_options=types.HttpOptions(timeout=30000),
+    )
     history_data = load_history()
     past_questions = get_past_questions(history_data)
     insights = load_weekly_insights()
@@ -228,12 +231,13 @@ Strict rules:
 """
 
     FALLBACK_MODELS = [
-        "gemini-3.8-flash",
-        "gemini-3.5-flash",
         "gemini-3.5-flash-lite",
+        "gemini-3.5-flash",
+        "gemini-3.8-flash",
         "gemini-3.6-flash",
         "gemini-3.1-flash-lite",
     ]
+
     max_retries = len(FALLBACK_MODELS)
 
     for attempt in range(1, max_retries + 1):
