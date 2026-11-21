@@ -219,12 +219,12 @@ Strict rules:
 1. Return ONLY a valid JSON array containing exactly {count} object(s). No markdown fences.
 2. Each object MUST include these exact keys:
    - "hook": energetic 5-8 word curiosity hook (NEVER mention a specific number of seconds like "in 5 seconds")
-   - "question": clean math expression or short word problem WITHOUT brackets or "[ ? ]" (e.g., "18 × 35 = ?" or "What is 15% of 240?")
+   - "question": clean math expression or short word problem using crisp symbols like %, ×, ÷, = WITHOUT brackets or "[ ? ]" (e.g., "18 × 35 = ?" or "What is 38% of 50?")
    - "topic": concise category label (e.g., "Percentage Trick", "Difference of Squares", "Fast Multiplication")
    - "difficulty": "EASY", "MEDIUM", or "HARD"
    - "timer_seconds": integer (15 for EASY, 25 for MEDIUM, 35 for HARD)
-   - "answer": exact final numerical or algebraic answer
-   - "explanation": exactly 3 short, punchy spoken sentences teaching the mental shortcut step-by-step and WHY it works
+   - "answer": exact final numerical or percentage answer using % if applicable (e.g., "19" or "25%")
+   - "explanation": 2 to 3 short, punchy equation-style steps using symbols (%, ×, ÷, =) instead of long wordy paragraphs (e.g., "Flip it: 50% of 38 is the exact same! Half of 38 = 19.")
    - "outro": 1 short engaging question asking viewers how fast they solved it
 3. NEVER repeat or closely paraphrase any of these recent questions:
 {json.dumps(list(past_questions)[-45:], ensure_ascii=False)}
@@ -362,16 +362,16 @@ def ensure_sfx_assets(sfx_dir: str = "assets") -> tuple:
 # ==============================================================================
 import re
 
-
 def clean_math_for_tts(text: str) -> str:
-    """Converts visual math symbols into natural spoken English for Edge-TTS."""
+    """Converts visual math symbols (%, =, ×, ÷) into natural spoken words for Edge-TTS."""
     s = str(text)
     s = re.sub(r"=\s*\[?\s*\?\s*\]?", " equals what?", s)
     s = re.sub(r"\[?\s*\?\s*\]?", "", s)
-    s = s.replace("×", " times ").replace("÷", " divided by ")
+    s = re.sub(r"(\d)\s*%", r"\1 percent", s)
+    s = s.replace("%", " percent ")
+    s = s.replace("×", " times ").replace("÷", " divided by ").replace("=", " equals ")
     s = re.sub(r"\s+", " ", s).strip()
     return s
-
 
 def prepare_puzzle_audio(
     puzzle: dict,
@@ -427,7 +427,7 @@ def prepare_puzzle_audio(
     }
 
 # ==============================================================================
-# PART 9 & 10 OF 20: CANVAS SPEC, FLOATING MATH SYMBOLS & ANIMATED MASCOT
+# PART 9 & 10 OF 20: BACKGROUND LOADER, FLOATING SYMBOLS & 430PX LIP-SYNC MASCOT
 # ==============================================================================
 FONT_CANDIDATES = [
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
@@ -436,7 +436,14 @@ FONT_CANDIDATES = [
     "arialbd.ttf",
 ]
 
-MATH_SYMBOLS = ["+", "=", "×", "÷", "!"]
+MATH_SYMBOLS = ["%", "+", "=", "×", "÷", "!"]
+
+BG_CANDIDATES = [
+    "bg.png", "bg.jpg", "bg.jpeg",
+    "background.png", "background.jpg", "background.jpeg",
+    "assets/bg.png", "assets/bg.jpg", "assets/bg.jpeg",
+    "assets/background.png", "assets/background.jpg", "assets/background.jpeg",
+]
 
 
 def load_font(size: int) -> ImageFont.FreeTypeFont:
@@ -447,60 +454,92 @@ def load_font(size: int) -> ImageFont.FreeTypeFont:
 
 
 def get_canvas_spec(mode: str) -> dict:
-    """Returns resolution and responsive typography sizes for 9:16 Short vs 16:9 Long."""
+    """Returns resolution, larger mascot size (430px Short), and responsive fonts."""
     if mode == "short":
         return {
             "width": 1080,
             "height": 1920,
-            "pad": 60,
+            "pad": 56,
             "font_badge": load_font(34),
             "font_hook": load_font(58),
-            "font_question": load_font(78),
-            "font_timer": load_font(124),
-            "font_answer": load_font(82),
-            "font_body": load_font(42),
+            "font_question": load_font(76),
+            "font_timer": load_font(120),
+            "font_answer": load_font(80),
+            "font_body": load_font(38),
             "font_symbol_bg": load_font(64),
-            "font_symbol_orbit": load_font(46),
-            "mascot_size": 340,
+            "font_symbol_orbit": load_font(48),
+            "mascot_size": 430,
         }
     return {
         "width": 1920,
         "height": 1080,
-        "pad": 85,
+        "pad": 80,
         "font_badge": load_font(32),
         "font_hook": load_font(50),
-        "font_question": load_font(70),
-        "font_timer": load_font(110),
-        "font_answer": load_font(74),
-        "font_body": load_font(38),
+        "font_question": load_font(68),
+        "font_timer": load_font(108),
+        "font_answer": load_font(72),
+        "font_body": load_font(36),
         "font_symbol_bg": load_font(58),
-        "font_symbol_orbit": load_font(42),
-        "mascot_size": 290,
+        "font_symbol_orbit": load_font(44),
+        "mascot_size": 350,
     }
 
 
-def draw_floating_math_symbols(canvas: Image.Image, spec: dict, theme: dict, t_sec: float):
-    """Renders drifting translucent + = × ÷ ! operators across the background."""
+def prepare_base_background(spec: dict, theme: dict) -> Image.Image:
+    """
+    Loads your uploaded background image (bg.png / background.jpg / etc.),
+    scales & center-crops it to fit the canvas, and applies a dark readability tint.
+    """
     w, h = spec["width"], spec["height"]
-    overlay = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-    odraw = ImageDraw.Draw(overlay)
+    tint_layer = Image.new("RGB", (w, h), theme["bg"])
+
+    found_bg = next((p for p in BG_CANDIDATES if os.path.exists(p)), None)
+    if not found_bg:
+        print("[Background] No custom bg image found; using solid theme background.")
+        return tint_layer
+
+    print(f"[Background] Loaded custom background image: {found_bg}")
+    raw = Image.open(found_bg).convert("RGB")
+    scale = max(w / raw.width, h / raw.height)
+    new_w, new_h = int(raw.width * scale), int(raw.height * scale)
+    resized = raw.resize((new_w, new_h), Image.Resampling.LANCZOS)
+
+    left = (new_w - w) // 2
+    top = (new_h - h) // 2
+    cropped = resized.crop((left, top, left + w, top + h))
+
+    # Blend 45% custom background + 55% dark theme tint so white/neon text pops clearly
+    return Image.blend(cropped, tint_layer, alpha=0.55)
+
+
+def _blend_rgb(fg: tuple, bg: tuple, alpha: float) -> tuple:
+    r0, g0, b0 = fg
+    r1, g1, b1 = bg
+    return (
+        int(r0 * alpha + r1 * (1.0 - alpha)),
+        int(g0 * alpha + g1 * (1.0 - alpha)),
+        int(b0 * alpha + b1 * (1.0 - alpha)),
+    )
+
+
+def draw_floating_math_symbols(canvas: Image.Image, spec: dict, theme: dict, t_sec: float):
+    """Renders drifting %, +, =, ×, ÷, ! operators across the background."""
+    w, h = spec["width"], spec["height"]
+    draw = ImageDraw.Draw(canvas)
 
     count = 16
     for i in range(count):
         sym = MATH_SYMBOLS[i % len(MATH_SYMBOLS)]
         col_rgb = theme["accent"] if i % 2 == 0 else theme["highlight"]
-        # Deterministic staggered horizontal position + smooth upward drift
         x_base = int(((i * 0.6180339) % 1.0) * (w - 100)) + 50
         x_wobble = int(math.sin(t_sec * 1.6 + i * 1.3) * 28)
         speed = 42 + (i % 4) * 14
         y_pos = int((h - ((t_sec * speed + i * (h / count)) % (h + 120))) - 60)
 
-        pulse_alpha = int(38 + 24 * math.sin(t_sec * 2.5 + i))
-        fill_rgba = (col_rgb[0], col_rgb[1], col_rgb[2], pulse_alpha)
-        odraw.text((x_base + x_wobble, y_pos), sym, font=spec["font_symbol_bg"], fill=fill_rgba)
-
-    composited = Image.alpha_composite(canvas.convert("RGBA"), overlay)
-    canvas.paste(composited.convert("RGB"))
+        alpha = 0.22 + 0.10 * math.sin(t_sec * 2.5 + i)
+        blended_col = _blend_rgb(col_rgb, theme["bg"], alpha)
+        draw.text((x_base + x_wobble, y_pos), sym, font=spec["font_symbol_bg"], fill=blended_col)
 
 
 def load_mascot_sprites(target_size: int) -> dict:
@@ -522,6 +561,7 @@ def paste_mascot_with_symbols(
     canvas: Image.Image,
     sprites: dict,
     stage: str,
+    is_speaking_now: bool,
     cx: int,
     cy: int,
     t_sec: float,
@@ -529,23 +569,23 @@ def paste_mascot_with_symbols(
     theme: dict,
 ):
     """
-    Composites the mascot with talking lip-flap / thinking pose, lively bounce,
-    and orbiting + = × ÷ ! operators around the character.
+    Composites the 430px mascot with audio-synced mouth movement (closes on pauses!),
+    thinking pose during countdown, and orbiting %, +, =, ×, ÷, ! symbols.
     """
-    is_speaking = stage in ("hook", "question", "reveal", "outro")
-    if is_speaking:
-        # Alternate mouth open/closed ~6 times per second while speaking
-        mouth_open = int(t_sec * 6.5) % 2 == 0
-        pose = "open" if (mouth_open or sprites.get("closed") is None) else "closed"
-        bounce_y = -int(abs(math.sin(t_sec * 6.5)) * 14)
-    else:
+    if stage == "countdown":
         pose = "think"
-        bounce_y = int(math.sin(t_sec * 3.2) * 10)
+        bounce_y = int(math.sin(t_sec * 3.2) * 8)
+    elif is_speaking_now:
+        mouth_open = int(t_sec * 8.0) % 2 == 0
+        pose = "open" if (mouth_open or sprites.get("closed") is None) else "closed"
+        bounce_y = -int(abs(math.sin(t_sec * 8.0)) * 11)
+    else:
+        pose = "closed" if sprites.get("closed") is not None else "open"
+        bounce_y = int(math.sin(t_sec * 2.5) * 4)
 
-    # Orbiting math symbols (+ = × ÷ !) flanking the mascot
     draw = ImageDraw.Draw(canvas)
-    orbit_radius_x = int(spec["mascot_size"] * 0.72)
-    orbit_radius_y = int(spec["mascot_size"] * 0.28)
+    orbit_radius_x = int(spec["mascot_size"] * 0.68)
+    orbit_radius_y = int(spec["mascot_size"] * 0.22)
     for idx, sym in enumerate(MATH_SYMBOLS):
         angle = t_sec * 1.9 + (idx * (2 * math.pi / len(MATH_SYMBOLS)))
         sx = int(cx + math.cos(angle) * orbit_radius_x)
@@ -559,7 +599,7 @@ def paste_mascot_with_symbols(
         py = int(cy - sprite.height // 2 + bounce_y)
         canvas.paste(sprite, (px, py), sprite)
     else:
-        r = 95
+        r = 105
         draw.ellipse([cx - r, cy - r + bounce_y, cx + r, cy + r + bounce_y], outline=theme["accent"], width=6)
 
 # ==============================================================================
@@ -799,7 +839,7 @@ def render_puzzle_frame(
     return np.array(canvas)
 
 # ==============================================================================
-# PART 14 OF 20: SINGLE-PUZZLE VIDEOCLIP TIMELINE BUILDER (30 FPS)
+# PART 14 OF 20: AUDIO-REACTIVE LIP-SYNC & 24 FPS VIDEOCLIP BUILDER
 # ==============================================================================
 try:
     from moviepy import VideoClip
@@ -807,6 +847,52 @@ try:
 except ImportError:
     from moviepy.editor import VideoClip
     MOVIEPY_V2 = False
+
+
+def extract_speech_activity(audio_info: dict, total_dur: float, fps: int = 24) -> np.ndarray:
+    """
+    Builds a boolean array (one entry per frame at `fps`) that is True ONLY
+    when the narrator's voiceover is actively speaking (silent during pauses & countdown).
+    """
+    n_frames = max(1, int(math.ceil(total_dur * fps)) + 2)
+    activity = np.zeros(n_frames, dtype=bool)
+
+    t_hook_start = 0.0
+    t_q_start = audio_info["hook_dur"] + 0.35
+    t_exp_start = t_q_start + audio_info["question_dur"] + 0.35 + audio_info["final_timer"] + 0.15
+    t_outro_start = t_exp_start + audio_info["explanation_dur"] + 0.25
+
+    segments = [
+        (audio_info["hook_mp3"], t_hook_start),
+        (audio_info["question_mp3"], t_q_start),
+        (audio_info["explanation_mp3"], t_exp_start),
+    ]
+    if audio_info.get("outro_mp3"):
+        segments.append((audio_info["outro_mp3"], t_outro_start))
+
+    for mp3_path, start_t in segments:
+        if not mp3_path or not os.path.exists(mp3_path):
+            continue
+        clip = AudioFileClip(mp3_path)
+        try:
+            arr = clip.to_soundarray(fps=2400)
+            if arr.ndim > 1:
+                arr = np.mean(np.abs(arr), axis=1)
+            else:
+                arr = np.abs(arr)
+
+            samples_per_frame = max(1, int(2400 / fps))
+            seg_frames = len(arr) // samples_per_frame
+            for f_idx in range(seg_frames):
+                chunk = arr[f_idx * samples_per_frame : (f_idx + 1) * samples_per_frame]
+                if float(np.mean(chunk)) > 0.018:
+                    global_f = int(round((start_t * fps) + f_idx))
+                    if 0 <= global_f < n_frames:
+                        activity[global_f] = True
+        finally:
+            clip.close()
+
+    return activity
 
 
 def build_puzzle_video_clip(
@@ -819,7 +905,8 @@ def build_puzzle_video_clip(
     theme: dict,
     sprites: dict,
 ) -> VideoClip:
-    """Creates a 30 FPS VideoClip for one complete puzzle segment."""
+    """Creates a 24 FPS VideoClip with real audio-synced mascot lip movement."""
+    fps = 24
     total_dur = (
         audio_info["hook_dur"]
         + 0.35
@@ -830,8 +917,11 @@ def build_puzzle_video_clip(
         + 0.40
         + (audio_info["outro_dur"] + 0.30 if audio_info["outro_mp3"] else 0.0)
     )
+    speech_activity = extract_speech_activity(audio_info, total_dur, fps=fps)
 
     def make_frame(t):
+        f_idx = min(len(speech_activity) - 1, max(0, int(t * fps)))
+        is_speaking_now = bool(speech_activity[f_idx])
         return render_puzzle_frame(
             t_sec=t,
             puzzle=puzzle,
@@ -842,11 +932,12 @@ def build_puzzle_video_clip(
             spec=spec,
             theme=theme,
             sprites=sprites,
+            is_speaking_now=is_speaking_now,
         )
 
     if MOVIEPY_V2:
-        return VideoClip(frame_function=make_frame, duration=total_dur).with_fps(30)
-    return VideoClip(make_frame=make_frame, duration=total_dur).set_fps(30)
+        return VideoClip(frame_function=make_frame, duration=total_dur).with_fps(fps)
+    return VideoClip(make_frame=make_frame, duration=total_dur).set_fps(fps)
 
 # ==============================================================================
 # PART 15 OF 20: SYNCHRONIZED VOICEOVER, TICK & CHIME AUDIO MIXER
