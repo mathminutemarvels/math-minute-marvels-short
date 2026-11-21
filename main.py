@@ -227,17 +227,29 @@ Strict rules:
 {json.dumps(list(past_questions)[-45:], ensure_ascii=False)}
 """
 
+    FALLBACK_MODELS = [
+        "gemini-3.8-flash",
+        "gemini-3.5-flash",
+        "gemini-3.5-flash-lite",
+        "gemini-3.6-flash",
+        "gemini-3.1-flash-lite",
+    ]
+    max_retries = len(FALLBACK_MODELS)
+
     for attempt in range(1, max_retries + 1):
+        model_name = FALLBACK_MODELS[attempt - 1]
         try:
+            print(f"[Gemini Attempt {attempt}/{max_retries}] Trying model: {model_name}")
             response = client.models.generate_content(
-                model="gemini-3.8-flash",
+                model=model_name,
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
                     temperature=0.85,
                 ),
             )
-            puzzles = json.loads((response.text or "").strip())
+            raw_text = (response.text or "").strip()
+            puzzles = json.loads(raw_text)
 
             if not isinstance(puzzles, list) or len(puzzles) != count:
                 raise ValueError(f"Expected JSON list of {count} item(s), got {type(puzzles).__name__}.")
@@ -260,14 +272,15 @@ Strict rules:
                 p["timer_seconds"] = max(12, min(38, int(p["timer_seconds"])))
                 validated.append(p)
 
-            print(f"[Gemini] Generated {len(validated)} unique {mode} puzzle(s).")
+            print(f"[Gemini] Successfully generated {len(validated)} unique {mode} puzzle(s) using {model_name}.")
             return validated
 
         except Exception as err:
-            print(f"[Gemini Attempt {attempt}/{max_retries}] Error: {err}")
+            print(f"[Gemini Attempt {attempt}/{max_retries}] {model_name} failed: {err}")
             if attempt == max_retries:
-                raise RuntimeError("Failed to generate valid puzzles after maximum retries.") from err
-            time.sleep(2 * attempt)
+                raise RuntimeError("Failed to generate valid puzzles after trying all fallback models.") from err
+            time.sleep(3 * attempt)
+    
 
 # ==============================================================================
 # PART 6 OF 20: EDGE-TTS VOICE ROTATION & DURATION MEASURER
