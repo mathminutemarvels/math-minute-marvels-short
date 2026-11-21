@@ -1005,7 +1005,6 @@ from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
-
 def get_youtube_service():
     """Builds an authenticated YouTube Data API v3 client from YOUTUBE_TOKEN_JSON."""
     token_raw = os.environ.get("YOUTUBE_TOKEN_JSON")
@@ -1013,13 +1012,7 @@ def get_youtube_service():
         raise EnvironmentError("YOUTUBE_TOKEN_JSON secret is missing.")
 
     token_info = json.loads(token_raw)
-    creds = Credentials.from_authorized_user_info(
-        token_info,
-        scopes=[
-            "https://googleapis.com",
-            "https://googleapis.com",
-        ],
-    )
+    creds = Credentials.from_authorized_user_info(token_info)
     if creds.expired and creds.refresh_token:
         creds.refresh(Request())
 
