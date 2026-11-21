@@ -27,17 +27,10 @@ def get_youtube_service():
         raise EnvironmentError("YOUTUBE_TOKEN_JSON secret is missing.")
 
     token_info = json.loads(token_raw)
-    creds = Credentials.from_authorized_user_info(
-        token_info,
-        scopes=[
-            "https://googleapis.com",
-            "https://googleapis.com",
-        ],
-    )
+    creds = Credentials.from_authorized_user_info(token_info)
     if creds.expired and creds.refresh_token:
         creds.refresh(Request())
     return build("youtube", "v3", credentials=creds)
-
 
 def load_video_records() -> dict:
     """Maps video_id -> {topic, difficulty, question} from recent history.json entries."""
