@@ -182,6 +182,51 @@ REQUIRED_PUZZLE_KEYS = {
     "outro",
 }
 
+TOPIC_POOL = [
+    "Fast Mental Multiplication",
+    "Square & Cube Shortcuts",
+    "Number Sequence & Pattern Logic",
+    "Fraction & Ratio Tricks",
+    "Algebraic Speed Tricks",
+    "Mental Division & Divisibility Hacks",
+    "Percentage Shortcuts",
+    "Tricky Math & Logic Riddles",
+]
+
+DIFFICULTY_TIMERS = {
+    "EASY": 15,
+    "MEDIUM": 25,
+    "HARD": 35,
+}
+
+
+def _pick_forced_topics(history_data: list, count: int) -> list:
+    """Selects distinct math topics that were NOT used in the last 6 runs."""
+    recent_topics = [
+        str(item.get("topic", "")).strip().lower()
+        for item in history_data[-6:]
+        if isinstance(item, dict) and item.get("topic")
+    ]
+    fresh = [t for t in TOPIC_POOL if t.lower() not in recent_topics]
+    if len(fresh) < count:
+        fresh = TOPIC_POOL[:]
+    random.shuffle(fresh)
+    return fresh[:count]
+
+
+def _pick_random_difficulty(history_data: list) -> tuple:
+    """Picks a random difficulty (EASY, MEDIUM, or HARD) different from the last run."""
+    last_diff = next(
+        (
+            str(item.get("difficulty", "")).strip().upper()
+            for item in reversed(history_data)
+            if isinstance(item, dict) and item.get("difficulty")
+        ),
+        None,
+    )
+    choices = [d for d in DIFFICULTY_TIMERS if d != last_diff] or list(DIFFICULTY_TIMERS)
+    chosen = random.choice(choices)
+    return chosen, DIFFICULTY_TIMERS.get(chosen, 25)
 
 def generate_puzzles(mode: str = "short", max_retries: int = 4) -> list:
     """
@@ -204,28 +249,42 @@ def generate_puzzles(mode: str = "short", max_retries: int = 4) -> list:
     best_topics = ", ".join(insights.get("best_topics", [])[:4])
     pref_diff = insights.get("preferred_difficulty", "MEDIUM")
 
-    difficulty_rule = (
-        f"Pick one difficulty (bias slightly toward {pref_diff})."
-        if mode == "short"
-        else "Progress smoothly from EASY (puzzles 1-2) to MEDIUM (puzzles 3-4) to HARD (puzzle 5)."
-    )
+    assigned_topics = _pick_forced_topics(history_data, count)
+    single_topic = next(iter(assigned_topics), "Fast Mental Multiplication")
+
+    if mode == "short":
+        chosen_diff, chosen_timer = _pick_random_difficulty(history_data)
+        topic_instruction = (
+            f'You MUST create a puzzle strictly from this exact topic: "{single_topic}". '
+            f"Do NOT use Percentage Shortcuts unless explicitly assigned above."
+        )
+        difficulty_rule = (
+            f'You MUST set "difficulty" to "{chosen_diff}" and "timer_seconds" to {chosen_timer}.'
+        )
+    else:
+        topic_instruction = (
+            f"Create {count} puzzles covering these exact {count} distinct topics in order: {json.dumps(assigned_topics)}."
+        )
+        difficulty_rule = (
+            "Progress smoothly across the 5 puzzles: Puzzle 1-2 EASY (15s), Puzzle 3-4 MEDIUM (25s), Puzzle 5 HARD (35s)."
+        )
 
     prompt = f"""
-You are an engaging mental-math educator creating {count} original math puzzle(s) for YouTube ({mode} format).
-Favor high-performing topics: {best_topics}.
+You are an energetic mental-math creator making {count} original math puzzle(s) for Math Minute Marvels ({mode} format).
+{topic_instruction}
 {difficulty_rule}
 
 Strict rules:
 1. Return ONLY a valid JSON array containing exactly {count} object(s). No markdown fences.
 2. Each object MUST include these exact keys:
-   - "hook": energetic 5-8 word curiosity hook (NEVER mention a specific number of seconds like "in 5 seconds")
-   - "question": clean math expression or short word problem using crisp symbols like %, ×, ÷, = WITHOUT brackets or "[ ? ]" (e.g., "18 × 35 = ?" or "What is 38% of 50?")
-   - "topic": concise category label (e.g., "Percentage Trick", "Difference of Squares", "Fast Multiplication")
+   - "hook": high-energy 10-14 word spoken intro + watch-till-the-end challenge (e.g., "Welcome to Math Minute Marvels! Only 3% solve this—stay till the end to test your speed!")
+   - "question": clean math expression using %, ×, ÷, =, - WITHOUT brackets (e.g., "18 × 35 = ?" or "88² - 12² = ?")
+   - "topic": exact assigned topic name
    - "difficulty": "EASY", "MEDIUM", or "HARD"
    - "timer_seconds": integer (15 for EASY, 25 for MEDIUM, 35 for HARD)
-   - "answer": exact final numerical or percentage answer using % if applicable (e.g., "19" or "25%")
-   - "explanation": 2 to 3 short, punchy equation-style steps using symbols (%, ×, ÷, =) instead of long wordy paragraphs (e.g., "Flip it: 50% of 38 is the exact same! Half of 38 = 19.")
-   - "outro": 1 short engaging question asking viewers how fast they solved it
+   - "answer": exact final numerical or percentage answer
+   - "explanation": 2 to 3 short equation-style steps with completed calculations (never leave "?" inside explanation steps)
+   - "outro": energetic call-to-action asking viewers to comment their solve time, hit Like if they beat the clock, and Subscribe to Math Minute Marvels!
 3. NEVER repeat or closely paraphrase any of these recent questions:
 {json.dumps(list(past_questions)[-45:], ensure_ascii=False)}
 """
@@ -363,15 +422,17 @@ def ensure_sfx_assets(sfx_dir: str = "assets") -> tuple:
 import re
 
 def clean_math_for_tts(text: str) -> str:
-    """Converts visual math symbols (%, =, ×, ÷) into natural spoken words for Edge-TTS."""
+    """Converts visual math symbols (%, =, ×, ÷, -) into natural spoken English."""
     s = str(text)
     s = re.sub(r"=\s*\[?\s*\?\s*\]?", " equals what?", s)
     s = re.sub(r"\[?\s*\?\s*\]?", "", s)
     s = re.sub(r"(\d)\s*%", r"\1 percent", s)
     s = s.replace("%", " percent ")
     s = s.replace("×", " times ").replace("÷", " divided by ").replace("=", " equals ")
+    s = re.sub(r"(?<=\w)\s*-\s*(?=\w)", " minus ", s)
     s = re.sub(r"\s+", " ", s).strip()
     return s
+
 
 def prepare_puzzle_audio(
     puzzle: dict,
@@ -381,18 +442,22 @@ def prepare_puzzle_audio(
     work_dir: str,
     include_outro: bool = True,
 ) -> dict:
-    """
-    Synthesizes all voiceover tracks for one puzzle and clamps the countdown timer
-    so Shorts ALWAYS finish safely under 58.0 seconds.
-    """
+    """Synthesizes hook/intro, question, countdown motivation, explanation, and outro."""
     os.makedirs(work_dir, exist_ok=True)
     hook_mp3 = os.path.join(work_dir, f"p{idx}_hook.mp3")
     q_mp3 = os.path.join(work_dir, f"p{idx}_question.mp3")
+    challenge_mp3 = os.path.join(work_dir, f"p{idx}_challenge.mp3")
     exp_mp3 = os.path.join(work_dir, f"p{idx}_explanation.mp3")
     outro_mp3 = os.path.join(work_dir, f"p{idx}_outro.mp3")
 
     hook_dur = create_voice_clip(clean_math_for_tts(puzzle["hook"]), hook_mp3, voice, rate="+8%")
     q_dur = create_voice_clip(clean_math_for_tts(puzzle["question"]), q_mp3, voice, rate="+4%")
+    challenge_dur = create_voice_clip(
+        "Your clock starts now! Comment your answer before time runs out!",
+        challenge_mp3,
+        voice,
+        rate="+9%",
+    )
     exp_text = clean_math_for_tts(f"The answer is {puzzle['answer']}. {puzzle['explanation']}")
     exp_dur = create_voice_clip(exp_text, exp_mp3, voice, rate="+5%")
 
@@ -410,20 +475,19 @@ def prepare_puzzle_audio(
     else:
         final_timer = requested_timer
 
-    total_est = round(speech_total + final_timer, 2)
-    print(f"[Audio] Puzzle {idx + 1}: timer={final_timer}s (requested {requested_timer}s), total={total_est}s")
-
     return {
         "hook_mp3": hook_mp3,
         "hook_dur": hook_dur,
         "question_mp3": q_mp3,
         "question_dur": q_dur,
+        "challenge_mp3": challenge_mp3,
+        "challenge_dur": challenge_dur,
         "explanation_mp3": exp_mp3,
         "explanation_dur": exp_dur,
         "outro_mp3": outro_mp3 if include_outro else None,
         "outro_dur": outro_dur,
         "final_timer": final_timer,
-        "estimated_total_sec": total_est,
+        "estimated_total_sec": round(speech_total + final_timer, 2),
     }
 
 # ==============================================================================
@@ -512,8 +576,8 @@ def prepare_base_background(mode: str, spec: dict, theme: dict) -> Image.Image:
     top = (new_h - h) // 2
     cropped = resized.crop((left, top, left + w, top + h))
 
-    # Blend 55% custom background + 45% dark theme tint for high contrast
-    return Image.blend(cropped, tint_layer, alpha=0.22)
+    # Blend 85% custom background & logo + 15% subtle dark tint
+    return Image.blend(cropped, tint_layer, alpha=0.15)
 
 def _blend_rgb(fg: tuple, bg: tuple, alpha: float) -> tuple:
     r0, g0, b0 = fg
@@ -631,9 +695,9 @@ def draw_rounded_card(
     fill: tuple,
     outline: tuple,
     width: int = 3,
-    fill_alpha: int = 185,
+    fill_alpha: int = 170,
 ):
-    """Draws a translucent rounded card so background artwork & logos remain visible."""
+    """Draws a translucent glass card so background artwork & logo remain visible."""
     if isinstance(canvas_or_draw, Image.Image):
         x0, y0, x1, y1 = [int(v) for v in box]
         cw, ch = max(1, x1 - x0), max(1, y1 - y0)
@@ -642,8 +706,8 @@ def draw_rounded_card(
         odraw.rounded_rectangle(
             (0, 0, cw - 1, ch - 1),
             radius=radius,
-            fill=(fill[0], fill[1], fill[2], fill_alpha),
-            outline=(outline[0], outline[1], outline[2], 255),
+            fill=(fill, fill, fill, fill_alpha),
+            outline=(outline, outline, outline, 255),
             width=width,
         )
         canvas_or_draw.paste(overlay, (x0, y0), overlay)
@@ -762,8 +826,8 @@ def render_puzzle_frame(
     draw = ImageDraw.Draw(canvas)
 
     # YouTube Shorts UI safe margins (clears top icons and bottom title/channel bar)
-    top_margin = 150 if mode == "short" else 60
-    bottom_margin = 260 if mode == "short" else 55
+    top_margin = 470 if mode == "short" else 235
+    bottom_margin = 250 if mode == "short" else 50
 
     t_hook_end = audio_info["hook_dur"] + 0.35
     t_q_end = t_hook_end + audio_info["question_dur"] + 0.35
@@ -792,7 +856,7 @@ def render_puzzle_frame(
     # Top header pill (positioned safely below YouTube's top Shorts icons)
     label_prefix = f"PUZZLE {puzzle_num}/{total_puzzles}  •  " if total_puzzles > 1 else ""
     header_text = f"{label_prefix}{puzzle['topic'].upper()}  •  {puzzle['difficulty']}"
-    draw_rounded_card(draw, (pad, top_margin, w - pad, top_margin + 68), radius=24, fill=theme["card"], outline=theme["accent"], width=3)
+    draw_rounded_card(canvas, (pad, card_top, w - pad, card_bottom), radius=34, fill=theme["card"], outline=theme["accent"], width=3, fill_alpha=170)
     draw_centered_multiline(draw, header_text, spec["font_badge"], w // 2, top_margin + 16, w - pad * 2 - 40, theme["accent"])
 
     # Main content card (leaves generous space above bottom safe zone for 430px mascot)
@@ -897,7 +961,8 @@ def extract_speech_activity(audio_info: dict, total_dur: float, fps: int = 24) -
 
     t_hook_start = 0.0
     t_q_start = audio_info["hook_dur"] + 0.35
-    t_exp_start = t_q_start + audio_info["question_dur"] + 0.35 + audio_info["final_timer"] + 0.15
+    t_timer_start = t_q_start + audio_info["question_dur"] + 0.35
+    t_exp_start = t_timer_start + audio_info["final_timer"] + 0.15
     t_outro_start = t_exp_start + audio_info["explanation_dur"] + 0.25
 
     segments = [
@@ -905,6 +970,8 @@ def extract_speech_activity(audio_info: dict, total_dur: float, fps: int = 24) -
         (audio_info["question_mp3"], t_q_start),
         (audio_info["explanation_mp3"], t_exp_start),
     ]
+    if audio_info.get("challenge_mp3"):
+        segments.append((audio_info["challenge_mp3"], t_timer_start))
     if audio_info.get("outro_mp3"):
         segments.append((audio_info["outro_mp3"], t_outro_start))
 
@@ -1006,6 +1073,11 @@ def build_puzzle_audio_track(audio_info: dict, tick_path: str, chime_path: str) 
     opened.append(q_clip)
     tracks.append(_with_start(q_clip, t_cursor))
     t_cursor += audio_info["question_dur"] + 0.35
+
+    if audio_info.get("challenge_mp3") and os.path.exists(audio_info["challenge_mp3"]):
+        ch_clip = AudioFileClip(audio_info["challenge_mp3"])
+        ch_clip = ch_clip.with_start(t_cursor) if MOVIEPY_V2 else ch_clip.set_start(t_cursor)
+        audio_layers.append(ch_clip)
 
     # Schedule 1 tick sound per second of countdown
     timer_secs = int(audio_info["final_timer"])
