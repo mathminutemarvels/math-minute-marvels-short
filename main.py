@@ -424,6 +424,14 @@ def ensure_sfx_assets(sfx_dir: str = "assets") -> tuple:
 # ==============================================================================
 import re
 
+TIMER_PROMOS = [
+    "Your clock is ticking! Hit Like and Subscribe while you solve this!",
+    "Can you beat the timer? Smash Like and Subscribe for daily math tricks!",
+    "Think fast! Drop a Like and Subscribe if you love mental math!",
+    "Time is running! Hit Subscribe so you never miss a brain workout!",
+]
+
+
 def clean_math_for_tts(text: str) -> str:
     """Converts visual math symbols (%, =, ×, ÷, -) into natural spoken English."""
     s = str(text)
@@ -444,8 +452,10 @@ def prepare_puzzle_audio(
     voice: str,
     work_dir: str,
     include_outro: bool = True,
+    include_hook: bool = True,
+    include_promo: bool = False,
 ) -> dict:
-    """Synthesizes hook/intro, question, countdown motivation, explanation, and outro."""
+    """Synthesizes optional intro, question, optional timer promo, explanation, and outro."""
     os.makedirs(work_dir, exist_ok=True)
     hook_mp3 = os.path.join(work_dir, f"p{idx}_hook.mp3")
     q_mp3 = os.path.join(work_dir, f"p{idx}_question.mp3")
@@ -453,19 +463,22 @@ def prepare_puzzle_audio(
     exp_mp3 = os.path.join(work_dir, f"p{idx}_explanation.mp3")
     outro_mp3 = os.path.join(work_dir, f"p{idx}_outro.mp3")
 
-    hook_dur = create_voice_clip(clean_math_for_tts(puzzle["hook"]), hook_mp3, voice, rate="+8%")
+    hook_dur = 0.0
+    if include_hook and puzzle.get("hook"):
+        hook_dur = create_voice_clip(clean_math_for_tts(puzzle["hook"]), hook_mp3, voice, rate="+8%")
+
     q_dur = create_voice_clip(clean_math_for_tts(puzzle["question"]), q_mp3, voice, rate="+4%")
-    challenge_dur = create_voice_clip(
-        "Your clock starts now! Comment your answer before time runs out!",
-        challenge_mp3,
-        voice,
-        rate="+9%",
-    )
+
+    challenge_dur = 0.0
+    if include_promo:
+        promo_text = random.choice(TIMER_PROMOS)
+        challenge_dur = create_voice_clip(promo_text, challenge_mp3, voice, rate="+9%")
+
     exp_text = clean_math_for_tts(f"The answer is {puzzle['answer']}. {puzzle['explanation']}")
     exp_dur = create_voice_clip(exp_text, exp_mp3, voice, rate="+5%")
 
     outro_dur = 0.0
-    if include_outro:
+    if include_outro and puzzle.get("outro"):
         outro_dur = create_voice_clip(clean_math_for_tts(puzzle["outro"]), outro_mp3, voice, rate="+7%")
 
     buffer_sec = 1.4
@@ -479,11 +492,11 @@ def prepare_puzzle_audio(
         final_timer = requested_timer
 
     return {
-        "hook_mp3": hook_mp3,
+        "hook_mp3": hook_mp3 if include_hook else None,
         "hook_dur": hook_dur,
         "question_mp3": q_mp3,
         "question_dur": q_dur,
-        "challenge_mp3": challenge_mp3,
+        "challenge_mp3": challenge_mp3 if include_promo else None,
         "challenge_dur": challenge_dur,
         "explanation_mp3": exp_mp3,
         "explanation_dur": exp_dur,
@@ -832,7 +845,7 @@ def render_puzzle_frame(
     top_margin = 470 if mode == "short" else 235
     bottom_margin = 250 if mode == "short" else 50
 
-    t_hook_end = audio_info["hook_dur"] + 0.35
+    t_hook_end = (audio_info["hook_dur"] + 0.35) if audio_info["hook_dur"] > 0 else 0.0
     t_q_end = t_hook_end + audio_info["question_dur"] + 0.35
     t_timer_end = t_q_end + audio_info["final_timer"]
     t_exp_end = t_timer_end + audio_info["explanation_dur"] + 0.4
@@ -932,9 +945,9 @@ def render_puzzle_frame(
                 step_y += dyn_box_h + 12
 
             if stage == "outro" and puzzle.get("outro"):
-                outro_font = load_font(26 if mode == "short" else 24)
-                box_top = card_bottom - 102
-                box_bot = card_bottom - 16
+                outro_font = load_font(26 if mode == "short" else 28)
+                box_top = (card_bottom - 102) if mode == "short" else (ans_bottom + 24)
+                box_bot = (card_bottom - 16) if mode == "short" else (ans_bottom + 114)
                 draw_rounded_card(draw, (pad + 22, box_top, w - pad - 22, box_bot), radius=18, fill=theme["bg"], outline=theme["accent"], width=2)
                 draw_centered_multiline(draw, puzzle["outro"], outro_font, cx, box_top + 14, inner_w - 64, fill=theme.get("gold", "#FFD166"))
 
@@ -964,17 +977,19 @@ def extract_speech_activity(audio_info: dict, total_dur: float, fps: int = 24) -
     n_frames = max(1, int(math.ceil(total_dur * fps)) + 2)
     activity = np.zeros(n_frames, dtype=bool)
 
+    # Inside extract_speech_activity:
     t_hook_start = 0.0
-    t_q_start = audio_info["hook_dur"] + 0.35
+    t_q_start = (audio_info["hook_dur"] + 0.35) if audio_info["hook_dur"] > 0 else 0.0
     t_timer_start = t_q_start + audio_info["question_dur"] + 0.35
     t_exp_start = t_timer_start + audio_info["final_timer"] + 0.15
     t_outro_start = t_exp_start + audio_info["explanation_dur"] + 0.25
 
     segments = [
-        (audio_info["hook_mp3"], t_hook_start),
         (audio_info["question_mp3"], t_q_start),
         (audio_info["explanation_mp3"], t_exp_start),
     ]
+    if audio_info.get("hook_mp3"):
+        segments.append((audio_info["hook_mp3"], t_hook_start))
     if audio_info.get("challenge_mp3"):
         segments.append((audio_info["challenge_mp3"], t_timer_start))
     if audio_info.get("outro_mp3"):
@@ -1014,9 +1029,9 @@ def build_puzzle_video_clip(
 ) -> VideoClip:
     """Creates a 24 FPS VideoClip with custom background and audio-synced lip movement."""
     fps = 24
+    # Inside build_puzzle_video_clip:
     total_dur = (
-        audio_info["hook_dur"]
-        + 0.35
+        ((audio_info["hook_dur"] + 0.35) if audio_info["hook_dur"] > 0 else 0.0)
         + audio_info["question_dur"]
         + 0.35
         + audio_info["final_timer"]
@@ -1079,10 +1094,11 @@ def build_puzzle_audio_track(audio_info: dict, tick_path: str, chime_path: str) 
     tracks.append(_with_start(q_clip, t_cursor))
     t_cursor += audio_info["question_dur"] + 0.35
 
-    if audio_info.get("challenge_mp3") and os.path.exists(audio_info["challenge_mp3"]):
-        ch_clip = AudioFileClip(audio_info["challenge_mp3"])
-        opened.append(ch_clip)
-        tracks.append(_with_start(ch_clip, t_cursor))
+    if audio_info.get("hook_mp3") and os.path.exists(audio_info["hook_mp3"]):
+        hook_clip = AudioFileClip(audio_info["hook_mp3"])
+        opened.append(hook_clip)
+        tracks.append(_with_start(hook_clip, t_cursor))
+        t_cursor += audio_info["hook_dur"] + 0.35
 
     # Schedule 1 tick sound per second of countdown
     timer_secs = int(audio_info["final_timer"])
@@ -1144,7 +1160,14 @@ def render_complete_video(puzzles: list, mode: str, theme: dict, voice: str) -> 
     enriched_records = []
     total_puzzles = len(puzzles)
 
+    if mode == "short":
+        promo_indices = {0} if random.random() < 0.5 else set()
+    else:
+        promo_count = random.choice([1, 2])
+        promo_indices = set(random.sample(range(total_puzzles), k=min(promo_count, total_puzzles)))
+
     for idx, puzzle in enumerate(puzzles):
+        is_first = idx == 0
         is_last = idx == (total_puzzles - 1)
         audio_info = prepare_puzzle_audio(
             puzzle=puzzle,
@@ -1153,6 +1176,8 @@ def render_complete_video(puzzles: list, mode: str, theme: dict, voice: str) -> 
             voice=voice,
             work_dir=work_dir,
             include_outro=is_last,
+            include_hook=is_first,
+            include_promo=(idx in promo_indices),
         )
 
         vclip = build_puzzle_video_clip(
