@@ -936,7 +936,7 @@ def render_puzzle_frame(
                 box_top = card_bottom - 102
                 box_bot = card_bottom - 16
                 draw_rounded_card(draw, (pad + 22, box_top, w - pad - 22, box_bot), radius=18, fill=theme["bg"], outline=theme["accent"], width=2)
-                draw_centered_multiline(draw, puzzle["outro"], outro_font, cx, box_top + 14, inner_w - 64, fill=theme.get("gold", "#FFD166"), max_lines=2)
+                draw_centered_multiline(draw, puzzle["outro"], outro_font, cx, box_top + 14, inner_w - 64, fill=theme.get("gold", "#FFD166"))
 
     # Large 430px Mascot & handle placed safely above YouTube's bottom Shorts bar
     mascot_y = card_bottom + (175 if mode == "short" else 135)
