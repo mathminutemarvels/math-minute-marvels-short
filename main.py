@@ -709,8 +709,8 @@ def draw_rounded_card(
         odraw.rounded_rectangle(
             (0, 0, cw - 1, ch - 1),
             radius=radius,
-            fill=(fill, fill, fill, fill_alpha),
-            outline=(outline, outline, outline, 255),
+            fill=(*fill, fill_alpha),
+            outline=(*outline, 255),
             width=width,
         )
         canvas_or_draw.paste(overlay, (x0, y0), overlay)
