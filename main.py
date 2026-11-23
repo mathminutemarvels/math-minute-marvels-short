@@ -1077,8 +1077,8 @@ def build_puzzle_audio_track(audio_info: dict, tick_path: str, chime_path: str) 
 
     if audio_info.get("challenge_mp3") and os.path.exists(audio_info["challenge_mp3"]):
         ch_clip = AudioFileClip(audio_info["challenge_mp3"])
-        ch_clip = ch_clip.with_start(t_cursor) if MOVIEPY_V2 else ch_clip.set_start(t_cursor)
-        audio_layers.append(ch_clip)
+        opened.append(ch_clip)
+        tracks.append(_with_start(ch_clip, t_cursor))
 
     # Schedule 1 tick sound per second of countdown
     timer_secs = int(audio_info["final_timer"])
