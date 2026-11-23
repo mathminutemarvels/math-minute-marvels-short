@@ -182,7 +182,10 @@ REQUIRED_PUZZLE_KEYS = {
     "outro",
 }
 
+import random
+
 TOPIC_POOL = [
+
     "Fast Mental Multiplication",
     "Square & Cube Shortcuts",
     "Number Sequence & Pattern Logic",
