@@ -856,17 +856,15 @@ def render_puzzle_frame(
     ease = min(1.0, stage_elapsed / 0.25)
     slide_y = int(((1.0 - ease) ** 3) * 28)
 
+     # Main content card (leaves generous space above bottom safe zone for 430px mascot)
+    mascot_band_h = 370 if mode == "short" else 280
+    card_top = top_margin + 88 + slide_y
+    card_bottom = h - bottom_margin - mascot_band_h
     # Top header pill (positioned safely below YouTube's top Shorts icons)
     label_prefix = f"PUZZLE {puzzle_num}/{total_puzzles}  •  " if total_puzzles > 1 else ""
     header_text = f"{label_prefix}{puzzle['topic'].upper()}  •  {puzzle['difficulty']}"
     draw_rounded_card(canvas, (pad, card_top, w - pad, card_bottom), radius=34, fill=theme["card"], outline=theme["accent"], width=3, fill_alpha=170)
     draw_centered_multiline(draw, header_text, spec["font_badge"], w // 2, top_margin + 16, w - pad * 2 - 40, theme["accent"])
-
-    # Main content card (leaves generous space above bottom safe zone for 430px mascot)
-    mascot_band_h = 370 if mode == "short" else 280
-    card_top = top_margin + 88 + slide_y
-    card_bottom = h - bottom_margin - mascot_band_h
-    draw_rounded_card(canvas, (pad, card_top, w - pad, card_bottom), radius=34, fill=theme["card"], outline=theme["accent"], width=3, fill_alpha=175)
 
     inner_w = w - pad * 2 - 64
     cx = w // 2
