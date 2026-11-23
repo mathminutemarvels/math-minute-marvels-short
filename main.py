@@ -912,7 +912,7 @@ def render_puzzle_frame(
 
             step_font = load_font(35 if mode == "short" else 33)
             step_y = ans_bottom + 18
-            outro_reserve = 72 if (stage == "outro" and puzzle.get("outro")) else 16
+            outro_reserve = 115 if (stage == "outro" and puzzle.get("outro")) else 16
 
             for s_idx in range(visible_count):
                 step_label = f"Step {s_idx + 1}: {steps[s_idx]}"
@@ -932,7 +932,11 @@ def render_puzzle_frame(
                 step_y += dyn_box_h + 12
 
             if stage == "outro" and puzzle.get("outro"):
-                draw_centered_multiline(draw, puzzle["outro"], spec["font_badge"], cx, card_bottom - 54, inner_w, theme["highlight"])
+                outro_font = load_font(26 if mode == "short" else 24)
+                box_top = card_bottom - 102
+                box_bot = card_bottom - 16
+                draw_rounded_card(draw, (pad + 22, box_top, w - pad - 22, box_bot), radius=18, fill=theme["bg"], outline=theme["accent"], width=2)
+                draw_centered_multiline(draw, puzzle["outro"], outro_font, cx, box_top + 14, inner_w - 64, fill=theme["gold"], max_lines=2)
 
     # Large 430px Mascot & handle placed safely above YouTube's bottom Shorts bar
     mascot_y = card_bottom + (175 if mode == "short" else 135)
