@@ -5,6 +5,35 @@
     "Square Tricks",
     "Number Patterns"
   ],
+  "peak_hours_ist": [
+    8,
+    14,
+    19,
+    20
+  ],
+  "winning_hook_style": "challenge",
+  "shorts_per_day": 4,
+  "longs_per_week": 2,
+  "style_dna": {
+    "version": "1.0",
+    "color_vibrancy": 1.08,
+    "contrast_boost": 1.05,
+    "caption_words_per_chunk": 5,
+    "music_duck_volume": 0.14,
+    "creative_directive": "Use crisp real-world money, discount, and speed-calculation percentage scenarios.",
+    "previous_style_dna": null,
+    "last_evolved_utc": null
+  },
+  "daily_hook_trends": [
+    "Only 1% Can Solve This Percentage Puzzle — Are You In The 1%?",
+    "Calculate Any Percentage In 3 Seconds Flat — No Calculator Needed",
+    "The Discount Trap That Costs You Money — Spot The Trick Before You Pay",
+    "Visual Percentage Puzzle: Find The Missing Value Before Time Runs Out"
+  ],
+  "last_hook_scout_utc": "2026-11-24T20:24:22Z",
+  "avoid_patterns": [],
+  "qa_failures": [],
+  "last_tuned_utc": null,
   "preferred_difficulty": "MEDIUM",
   "analyzed_videos": 0,
   "updated_at_utc": "2026-11-22T04:26:12Z"
