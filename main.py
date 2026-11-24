@@ -813,6 +813,41 @@ RANDOM_TIMER_CTAS = [
     "Time is running! Comment your answer before zero and hit Like and Subscribe!",
 ]
 
+def prepare_puzzle_audio(
+    puzzle: dict,
+    idx: int,
+    mode: str,
+    voice: str,
+    work_dir: str,
+    include_hook: bool = False,
+    include_timer_cta: bool = False,
+    include_outro: bool = False,
+) -> dict:
+    os.makedirs(work_dir, exist_ok=True)
+    hook_mp3 = os.path.join(work_dir, f"p{idx}_hook.mp3")
+    q_mp3 = os.path.join(work_dir, f"p{idx}_question.mp3")
+    timer_cta_mp3 = os.path.join(work_dir, f"p{idx}_timer_cta.mp3")
+    exp_mp3 = os.path.join(work_dir, f"p{idx}_explanation.mp3")
+    outro_mp3 = os.path.join(work_dir, f"p{idx}_outro.mp3")
+
+    hook_dur = 0.0
+    if include_hook and puzzle.get("hook"):
+        hook_dur = create_voice_clip(clean_math_for_tts(puzzle["hook"]), hook_mp3, voice, rate="+8%")
+
+    q_dur = create_voice_clip(clean_math_for_tts(puzzle["question"]), q_mp3, voice, rate="+4%")
+
+    timer_cta_dur = 0.0
+    timer_cta_text = ""
+    if include_timer_cta:
+        timer_cta_text = random.choice(RANDOM_TIMER_CTAS)
+        timer_cta_dur = create_voice_clip(timer_cta_text, timer_cta_mp3, voice, rate="+9%")
+
+    exp_text = clean_math_for_tts(f"The answer is {puzzle['answer']}. {puzzle['explanation']}")
+    exp_dur = create_voice_clip(exp_text, exp_mp3, voice, rate="+5%")
+
+    outro_dur = 0.0
+    if include_outro and puzzle.get("outro"):
+        outro_dur = create_voice_clip(clean_math_for_tts(puzzle["outro"]), outro_mp3, voice, rate="+7%")
 
     # Allow full 30s / 45s / 60s variable countdowns (YouTube Shorts supports up to 180s)
     requested_timer = max(int(puzzle["timer_seconds"]), int(math.ceil(timer_cta_dur + 2.0)))
@@ -1638,6 +1673,19 @@ def burn_ass_subtitles_ffmpeg(raw_mp4: str, ass_path: str, final_mp4: str) -> st
     shutil.copyfile(raw_mp4, final_mp4)
     return final_mp4
 
+# ==============================================================================
+# PART 26 OF 30: COMPLETE VIDEO STITCHER, CHAPTER COLLECTOR & .ASS BURNER
+# ==============================================================================
+def _set_clip_audio(vclip, aclip):
+    return vclip.with_audio(aclip) if MOVIEPY_V2 else vclip.set_audio(aclip)
+
+
+def render_complete_video(puzzles: list, mode: str, theme: dict, voice: str) -> tuple:
+    work_dir = f"build_{mode}"
+    if os.path.exists(work_dir):
+        shutil.rmtree(work_dir)
+    os.makedirs(work_dir, exist_ok=True)
+    
     spec = get_canvas_spec(mode)
     sprites = load_mascot_sprites(spec["mascot_size"])
     base_bg = prepare_base_background(mode, spec, theme)
@@ -1723,6 +1771,42 @@ def burn_ass_subtitles_ffmpeg(raw_mp4: str, ass_path: str, final_mp4: str) -> st
             "created_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         })
         global_offset += timeline["total_dur"]
+
+    final_video = (
+        segment_clips
+        if len(segment_clips) == 1
+        else concatenate_videoclips(segment_clips, method="compose")
+    )
+
+    raw_mp4 = os.path.join(work_dir, f"raw_{mode}.mp4")
+    output_mp4 = "short.mp4" if mode == "short" else "long_video.mp4"
+
+    final_video.write_videofile(
+        raw_mp4,
+        fps=30,
+        codec="libx264",
+        audio_codec="aac",
+        audio_bitrate="192k",
+        preset="medium",
+        ffmpeg_params=["-pix_fmt", "yuv420p", "-movflags", "+faststart"],
+    )
+
+    final_video.close()
+    for sc in segment_clips:
+        sc.close()
+    for ah in all_opened_audio:
+        try:
+            ah.close()
+        except Exception:
+            pass
+
+    ass_path = os.path.join(work_dir, f"captions_{mode}.ass")
+    build_ass_subtitles_file(caption_segments, ass_path, mode)
+    burn_ass_subtitles_ffmpeg(raw_mp4, ass_path, output_mp4)
+
+    print(f"[Render] Exported {output_mp4} ({round(global_offset, 2)}s) successfully.")
+    return output_mp4, enriched_records, chapter_markers
+
 
 # ==============================================================================
 # PART 27 OF 30: HIGH-CTR 1280X720 LONG-FORM THUMBNAIL GENERATOR
@@ -1891,13 +1975,13 @@ def run_pre_upload_qa_gate(video_path: str, puzzles: list, mode: str) -> tuple:
         )
         for model_id in GEMINI_ACTIVE_MODELS:
             try:
-                gem_url = f"https://googleapis.com{model_id}:generateContent?key={gem_key}"
+                gem_url = "https://googleapis.com" + f"/v1beta/models/{model_id}:generateContent?key={gem_key}"
                 payload = {
                     "contents": [{"parts": [{"text": qa_prompt}, *frame_parts]}],
                     "generationConfig": {"temperature": 0.1, "responseMimeType": "application/json"},
                 }
                 resp = _http_post_json(gem_url, {}, payload, timeout_sec=45)
-                raw_txt = resp["candidates"]["content"]["parts"]["text"]
+                raw_txt = resp["candidates"][0]["content"]["parts"][0]["text"]
                 verdict = _extract_json_payload(raw_txt)
                 if not verdict.get("passed", True):
                     defects = "; ".join(verdict.get("defects", ["Visual overlap detected"]))
