@@ -530,9 +530,9 @@ def call_5ai_council(prompt: str, expect_json: bool = True, preferred_role: str 
             print(f"[5-AI Council] Querying {label}...")
             if kind in ("groq", "openrouter"):
                 base_url = (
-                    "https://groq.com"
+                    "https://groq.com" + "/openai/v1/chat/completions"
                     if kind == "groq"
-                    else "https://openrouter.ai"
+                    else "https://openrouter.ai" + "/api/v1/chat/completions"
                 )
                 body = {
                     "model": model_id,
@@ -546,7 +546,7 @@ def call_5ai_council(prompt: str, expect_json: bool = True, preferred_role: str 
 
             elif kind == "cloudflare":
                 acct_id, tok = cred
-                cf_url = f"https://cloudflare.com{acct_id}/ai/run/{model_id}"
+                cf_url = "https://cloudflare.com" + f"/client/v4/accounts/{acct_id}/ai/run/{model_id}"
                 data = _http_post_json(
                     cf_url,
                     {"Authorization": f"Bearer {tok}"},
@@ -555,7 +555,7 @@ def call_5ai_council(prompt: str, expect_json: bool = True, preferred_role: str 
                 text_out = data["result"]["response"]
 
             else:
-                gem_url = f"https://googleapis.com{model_id}:generateContent?key={cred}"
+                gem_url = "https://googleapis.com" + f"/v1beta/models/{model_id}:generateContent?key={cred}"
                 gen_cfg = {"temperature": 0.75}
                 if expect_json:
                     gen_cfg["responseMimeType"] = "application/json"
