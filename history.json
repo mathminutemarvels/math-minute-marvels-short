@@ -83,5 +83,16 @@
     "mode": "short",
     "created_at_utc": "2026-11-23T20:23:38Z",
     "video_id": "uW5BB5undcQ"
+  },
+  {
+    "question": "a farmer has 17 sheep and all but 9 run away. how many sheep are left?",
+    "topic": "Tricky Math & Logic Riddles",
+    "difficulty": "HARD",
+    "timer": 28,
+    "theme": "Electric Violet",
+    "voice": "en-US-AriaNeural",
+    "mode": "short",
+    "created_at_utc": "2026-11-24T02:32:22Z",
+    "video_id": "-slOHFV6kyk"
   }
 ]
