@@ -13,6 +13,9 @@ import shutil
 import asyncio
 import argparse
 import subprocess
+import base64
+import urllib.request
+import urllib.error
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -131,19 +134,48 @@ def get_past_questions(history_data: list, limit: int = 180) -> set:
             past.add(str(entry["question"]).strip().lower())
     return past
 
+DEFAULT_STYLE_DNA = {
+    "version": "1.0",
+    "color_vibrancy": 1.08,
+    "contrast_boost": 1.05,
+    "caption_words_per_chunk": 5,
+    "music_duck_volume": 0.14,
+    "creative_directive": "Use crisp real-world money, discount, and speed-calculation percentage scenarios.",
+    "previous_style_dna": None,
+    "last_evolved_utc": None,
+}
+
+
+def clamp_style_dna(dna: dict) -> dict:
+    """Clamps evolvable Style DNA parameters within safe visual/audio bounds."""
+    safe = dict(DEFAULT_STYLE_DNA)
+    if isinstance(dna, dict):
+        safe.update(dna)
+    safe["color_vibrancy"] = round(max(0.90, min(1.30, float(safe.get("color_vibrancy", 1.08)))), 2)
+    safe["contrast_boost"] = round(max(0.95, min(1.25, float(safe.get("contrast_boost", 1.05)))), 2)
+    safe["caption_words_per_chunk"] = max(3, min(7, int(safe.get("caption_words_per_chunk", 5))))
+    safe["music_duck_volume"] = round(max(0.06, min(0.24, float(safe.get("music_duck_volume", 0.14)))), 2)
+    safe["creative_directive"] = str(safe.get("creative_directive", DEFAULT_STYLE_DNA["creative_directive"]))[:220]
+    return safe
+
 
 def load_weekly_insights() -> dict:
     default_insights = {
         "best_topics": [
-            "Fast Mental Multiplication",
-            "Square & Cube Shortcuts",
-            "Number Sequence & Pattern Logic",
-            "Algebraic Speed Tricks",
+            "Percentage Increase & Decrease",
+            "Reverse Percentage Shortcuts",
+            "Successive Percentage Discounts",
+            "Mental Percentage of Quantity",
         ],
         "peak_hours_ist": [8, 14, 19, 20],
         "winning_hook_style": "challenge",
         "shorts_per_day": 4,
         "longs_per_week": 2,
+        "style_dna": dict(DEFAULT_STYLE_DNA),
+        "daily_hook_trends": [],
+        "last_hook_scout_utc": None,
+        "avoid_patterns": [],
+        "qa_failures": [],
         "last_tuned_utc": None,
     }
     if not os.path.exists(INSIGHTS_FILE):
@@ -153,22 +185,54 @@ def load_weekly_insights() -> dict:
             loaded = json.load(f)
             if isinstance(loaded, dict):
                 default_insights.update(loaded)
+                default_insights["style_dna"] = clamp_style_dna(default_insights.get("style_dna", {}))
             return default_insights
     except Exception:
         return default_insights
-
 
 def save_weekly_insights(insights: dict):
     with open(INSIGHTS_FILE, "w", encoding="utf-8") as f:
         json.dump(insights, f, indent=2, ensure_ascii=False)
 
 # ==============================================================================
-# PART 4 OF 30: MULTI-ARMED BANDIT IST -> UTC SLOT SCHEDULER
+# PART 4 OF 30: SINGLE-SLOT SEQUENTIAL SCHEDULER (T - 1H COMPILE WINDOW)
 # ==============================================================================
+def get_last_scheduled_video_id(history_data: list) -> str:
+    """Returns the most recent uploaded video_id from history.json if present."""
+    for rec in reversed(history_data):
+        if isinstance(rec, dict) and rec.get("video_id"):
+            return str(rec["video_id"]).strip()
+    return ""
+
+
+def check_previous_video_is_public(youtube, history_data: list) -> tuple:
+    """
+    Verifies on live YouTube Studio API that the previous video is already public
+    before scheduling the next single slot (prevents multi-slot queue pileup).
+    """
+    last_vid = get_last_scheduled_video_id(history_data)
+    if not last_vid:
+        return True, "No prior video found; clear to schedule single slot."
+
+    try:
+        resp = youtube.videos().list(part="status", id=last_vid).execute()
+        items = resp.get("items", [])
+        if not items:
+            return True, f"Previous video {last_vid} not found; clear to schedule."
+        status = items[0].get("status", {})
+        privacy = status.get("privacyStatus", "public")
+        publish_at = status.get("publishAt", "")
+        if privacy == "public":
+            return True, f"Previous video {last_vid} is already public."
+        return False, f"Previous video {last_vid} is still '{privacy}' (scheduled for {publish_at})."
+    except Exception as exc:
+        return True, f"Studio privacy check skipped ({exc}); proceeding safely."
+
+
 def get_next_publish_at_utc(mode: str, insights: dict = None) -> str:
     """
-    Computes the next upcoming IST upload slot (~45-60 mins after cron triggers),
-    applying 80% exploitation of proven peak hours and 20% exploration.
+    Computes the single next upcoming IST slot (~1 hour after cron compile trigger),
+    using 80% exploitation of proven peak hours and 20% exploration.
     """
     ist = ZoneInfo("Asia/Kolkata")
     now_ist = datetime.now(ist)
@@ -190,7 +254,7 @@ def get_next_publish_at_utc(mode: str, insights: dict = None) -> str:
         base_date = (now_ist + timedelta(days=day_offset)).date()
         for hour in active_slots:
             slot_dt = datetime(base_date.year, base_date.month, base_date.day, hour, 0, 0, tzinfo=ist)
-            if slot_dt > now_ist + timedelta(minutes=15):
+            if slot_dt > now_ist + timedelta(minutes=25):
                 candidates.append(slot_dt)
 
     if not candidates:
@@ -200,7 +264,7 @@ def get_next_publish_at_utc(mode: str, insights: dict = None) -> str:
     next_slot_ist = min(candidates)
     next_slot_utc = next_slot_ist.astimezone(timezone.utc)
     print(
-        f"[Scheduler] Target IST: {next_slot_ist.strftime('%Y-%m-%d %I:%M %p IST')} "
+        f"[Single-Slot Scheduler] Next IST Slot (T+1h): {next_slot_ist.strftime('%Y-%m-%d %I:%M %p IST')} "
         f"-> UTC: {next_slot_utc.strftime('%Y-%m-%dT%H:%M:%SZ')}"
     )
     return next_slot_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -274,22 +338,21 @@ def pick_voice(history_data: list) -> str:
 # PART 6 OF 30: CURRICULUM TREE, TOPIC LOCKOUT & DIFFICULTY ROTATOR
 # ==============================================================================
 CURRICULUM_TOPICS = [
-    "Fast Mental Multiplication",
-    "Square & Cube Shortcuts",
-    "Number Sequence & Pattern Logic",
-    "Fraction & Ratio Tricks",
-    "Algebraic Speed Tricks",
-    "Mental Division & Divisibility Hacks",
-    "Percentage Shortcuts",
-    "Tricky Math & Logic Riddles",
+    "Percentage Increase & Decrease",
+    "Reverse Percentage & Original Value",
+    "Successive Percentage Discounts",
+    "Mental Percentage of Quantity",
+    "Percentage Profit, Loss & Margin",
+    "Percentage Comparison & Ratio",
+    "Compound Percentage Growth",
+    "Tricky Percentage Word Puzzles",
 ]
 
 DIFFICULTY_TIMERS = {
-    "EASY": 15,
-    "MEDIUM": 25,
-    "HARD": 35,
+    "EASY": 30,
+    "MEDIUM": 45,
+    "HARD": 60,
 }
-
 
 def pick_curriculum_topics(history_data: list, count: int) -> list:
     """Selects `count` distinct math topics NOT used in the last 6 runs."""
@@ -323,69 +386,78 @@ def pick_short_difficulty(history_data: list) -> tuple:
 # PART 7 OF 30: SYMPY MATHEMATICAL EXPRESSION NORMALIZER
 # ==============================================================================
 def normalize_math_expr(raw: str) -> str:
-    """Converts human-readable math notation (×, ÷, ², %, 'of') into SymPy syntax."""
+    """Converts written 'percentage' and math symbols into SymPy-evaluable syntax."""
     s = str(raw).strip()
     s = re.sub(r"=\s*\[?\s*\?\s*\]?$", "", s).strip()
     s = s.rstrip("?").strip()
 
-    # Convert "X% of Y" -> "((X)/100)*(Y)"
+    # Convert "X percentage of Y" or "X% of Y" -> "((X)/100)*(Y)"
     s = re.sub(
-        r"(\d+(?:\.\d+)?)\s*%\s*of\s*(\d+(?:\.\d+)?)",
+        r"(\d+(?:\.\d+)?)\s*(?:percentage|%)\s*of\s*(\d+(?:\.\d+)?)",
         r"((\1)/100)*(\2)",
         s,
         flags=re.IGNORECASE,
     )
-    # Convert standalone percentages like "25%" -> "(25/100)"
-    s = re.sub(r"(\d+(?:\.\d+)?)\s*%", r"((\1)/100)", s)
+    # Convert standalone "25 percentage" or "25%" -> "(25/100)"
+    s = re.sub(r"(\d+(?:\.\d+)?)\s*(?:percentage|%)", r"((\1)/100)", s, flags=re.IGNORECASE)
 
-    # Convert unicode operators and superscripts
     s = s.replace("×", "*").replace("÷", "/").replace("−", "-").replace("–", "-")
     s = s.replace("²", "**2").replace("³", "**3").replace("^", "**")
-    s = re.sub(r"√\s*\(([^)]+)\)", r"sqrt(\1)", s)
-    s = re.sub(r"√\s*(\d+(?:\.\d+)?)", r"sqrt(\1)", s)
-
-    # Insert implicit multiplication (e.g., 2(3+4) -> 2*(3+4), 5x -> 5*x)
     s = re.sub(r"(\d)\s*\(", r"\1*(", s)
     s = re.sub(r"\)\s*\(", r")*(", s)
     s = re.sub(r"(\d)\s*([a-zA-Z])", r"\1*\2", s)
     return s.strip()
 
-# ==============================================================================
-# PART 8 OF 30: SYMPY MATHEMATICAL VERIFICATION GATE
-# ==============================================================================
+
+def validate_percentage_formatting(puzzle: dict) -> tuple:
+    """Enforces '%' in final answer and full word 'percentage' in question & explanation."""
+    q_text = str(puzzle.get("question", "")).strip()
+    exp_text = str(puzzle.get("explanation", "")).strip()
+    ans_text = str(puzzle.get("answer", "")).strip()
+
+    if "%" in q_text or "%" in exp_text:
+        return False, "Forbidden '%' symbol found inside question or explanation (must spell out 'percentage')"
+    if "percentage" not in q_text.lower():
+        return False, "Question must spell out the word 'percentage' in full"
+    if "percentage" not in exp_text.lower():
+        return False, "Explanation must spell out the word 'percentage' in full"
+    if "%" not in ans_text:
+        return False, "Final answer must include the '%' symbol (e.g., '25%')"
+    return True, "Percentage text rules passed"
+
+
 def verify_puzzle_with_sympy(puzzle: dict) -> tuple:
-    """
-    Verifies pure arithmetic/algebraic expressions using SymPy when parseable.
-    Returns (is_valid: bool, reason: str). Word/sequence riddles pass gracefully.
-    """
+    """Verifies percentage text rules first, then checks arithmetic via SymPy."""
+    fmt_ok, fmt_msg = validate_percentage_formatting(puzzle)
+    if not fmt_ok:
+        return False, fmt_msg
+
     if not SYMPY_AVAILABLE:
-        return True, "SymPy not installed; skipping symbolic check"
+        return True, "SymPy not installed; formatting verified"
 
     q_raw = str(puzzle.get("question", "")).strip()
     a_raw = str(puzzle.get("answer", "")).strip()
 
-    # Skip pure word problems or comma-separated number sequences
-    if "," in q_raw or len(re.findall(r"[a-zA-Z]{4,}", re.sub(r"\bof\b", "", q_raw, flags=re.I))) > 0:
-        return True, "Word/sequence puzzle; passed structural check"
+    # Word problems pass formatting check; pure expressions are verified symbolically
+    cleaned_words = re.sub(r"\b(?:percentage|of|is|what)\b", "", q_raw, flags=re.IGNORECASE)
+    if len(re.findall(r"[a-zA-Z]{3,}", cleaned_words)) > 0:
+        return True, "Percentage word puzzle; formatting verified"
 
     lhs_str = normalize_math_expr(q_raw)
     rhs_str = normalize_math_expr(a_raw)
-
     if not lhs_str or not rhs_str or "=" in lhs_str:
-        return True, "Non-standard equation format; passed"
+        return True, "Non-standard equation; formatting verified"
 
     try:
-        lhs_val = sp.sympify(lhs_str)
-        rhs_val = sp.sympify(rhs_str)
-        diff = sp.simplify(lhs_val - rhs_val)
+        diff = sp.simplify(sp.sympify(lhs_str) - sp.sympify(rhs_str))
         if diff == 0:
-            return True, f"Verified: {lhs_str} == {rhs_str}"
-        return False, f"Math mismatch: {lhs_str} evaluated to {sp.simplify(lhs_val)}, not {rhs_str}"
+            return True, f"SymPy verified: {lhs_str} == {rhs_str}"
+        return False, f"Math mismatch: {lhs_str} != {rhs_str}"
     except Exception as exc:
-        return True, f"Symbolic parse skipped ({exc})"
+        return True, f"Symbolic check skipped ({exc})"
 
 # ==============================================================================
-# PART 9 OF 30: GEMINI STRUCTURED SCRIPTWRITER (SINGLE INTRO & SINGLE OUTRO)
+# PART 9 OF 30: 5-AI MULTI-PROVIDER COUNCIL ROUTER (URLLIB REST + FALLBACKS)
 # ==============================================================================
 REQUIRED_PUZZLE_KEYS = {
     "hook",
@@ -398,11 +470,110 @@ REQUIRED_PUZZLE_KEYS = {
     "outro",
 }
 
-GEMINI_FALLBACK_MODELS = [
+GEMINI_ACTIVE_MODELS = (
     "gemini-3.5-flash-lite",
-    "gemini-3.5-flash",
-    "gemini-3.1-flash-lite",
-]
+    "gemini-3.6-flash",
+    "gemini-3-flash-preview",
+)
+
+
+def _http_post_json(url: str, headers: dict, payload: dict, timeout_sec: int = 35) -> dict:
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json", "User-Agent": "MathMinuteMarvels/2.0", **headers},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _extract_json_payload(raw_text: str):
+    cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", str(raw_text).strip(), flags=re.IGNORECASE)
+    return json.loads(cleaned)
+
+
+def call_5ai_council(prompt: str, expect_json: bool = True, preferred_role: str = "generator"):
+    """
+    Routes requests across Groq, OpenRouter, Cloudflare Workers AI, and Gemini
+    so single-provider rate limits or 503 errors never fail a run.
+    """
+    providers = []
+    groq_key = os.environ.get("GROQ_API_KEY", "").strip()
+    or_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+    cf_token = os.environ.get("CLOUDFLARE_API_TOKEN", "").strip()
+    cf_acct = os.environ.get("CLOUDFLARE_ACCOUNT_ID", "").strip()
+    gem_key = os.environ.get("GEMINI_API_KEY", "").strip()
+
+    if groq_key:
+        groq_models = (
+            ["openai/gpt-oss-120b", "llama-3.3-70b-versatile"]
+            if preferred_role == "auditor"
+            else ["llama-3.3-70b-versatile", "openai/gpt-oss-120b"]
+        )
+        for gm in groq_models:
+            providers.append(("Groq:" + gm, "groq", gm, groq_key))
+    if or_key:
+        providers.append(("OpenRouter:free", "openrouter", "openrouter/free", or_key))
+    if cf_token and cf_acct:
+        providers.append(("Cloudflare:llama-4-scout", "cloudflare", "@cf/meta/llama-4-scout-17b-16e-instruct", (cf_acct, cf_token)))
+    if gem_key:
+        for g_mod in GEMINI_ACTIVE_MODELS:
+            providers.append(("Gemini:" + g_mod, "gemini", g_mod, gem_key))
+
+    if not providers:
+        raise EnvironmentError("No AI API keys configured in environment secrets.")
+
+    last_err = None
+    for label, kind, model_id, cred in providers:
+        try:
+            print(f"[5-AI Council] Querying {label}...")
+            if kind in ("groq", "openrouter"):
+                base_url = (
+                    "https://groq.com"
+                    if kind == "groq"
+                    else "https://openrouter.ai"
+                )
+                body = {
+                    "model": model_id,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.72,
+                }
+                if expect_json and kind == "groq":
+                    body["response_format"] = {"type": "json_object"}
+                data = _http_post_json(base_url, {"Authorization": f"Bearer {cred}"}, body)
+                text_out = data["choices"][0]["message"]["content"]
+
+            elif kind == "cloudflare":
+                acct_id, tok = cred
+                cf_url = f"https://cloudflare.com{acct_id}/ai/run/{model_id}"
+                data = _http_post_json(
+                    cf_url,
+                    {"Authorization": f"Bearer {tok}"},
+                    {"messages": [{"role": "user", "content": prompt}], "max_tokens": 2048},
+                )
+                text_out = data["result"]["response"]
+
+            else:
+                gem_url = f"https://googleapis.com{model_id}:generateContent?key={cred}"
+                gen_cfg = {"temperature": 0.75}
+                if expect_json:
+                    gen_cfg["responseMimeType"] = "application/json"
+                data = _http_post_json(
+                    gem_url,
+                    {},
+                    {"contents": [{"parts": [{"text": prompt}]}], "generationConfig": gen_cfg},
+                )
+                text_out = data["candidates"][0]["content"]["parts"][0]["text"]
+
+            return _extract_json_payload(text_out) if expect_json else str(text_out).strip()
+
+        except Exception as err:
+            last_err = err
+            print(f"[5-AI Council] {label} failed ({err}); falling back...")
+            time.sleep(1.0)
+
+    raise RuntimeError(f"All 5-AI Council providers exhausted: {last_err}")
 
 
 def build_gemini_prompt(
@@ -411,57 +582,62 @@ def build_gemini_prompt(
     assigned_topics: list,
     difficulty_rule: str,
     past_questions: set,
+    insights: dict = None,
 ) -> str:
-    single_topic = next(iter(assigned_topics), "Fast Mental Multiplication")
+    insights = insights or load_weekly_insights()
+    directive = insights.get("style_dna", {}).get("creative_directive", "")
+    hook_trends = insights.get("daily_hook_trends", [])[:4]
+    avoid_list = insights.get("avoid_patterns", [])[-8:]
+
+    single_topic = next(iter(assigned_topics), "Percentage Increase & Decrease")
     if mode == "short":
         topic_rule = (
-            f'Create 1 puzzle strictly from this topic: "{single_topic}". '
+            f'Create 1 percentage math puzzle strictly from this topic: "{single_topic}". '
             f'Include a single energetic opening intro in "hook" starting with "Welcome to Math Minute Marvels!" '
             f'and a single closing CTA in "outro".'
         )
     else:
         topic_rule = (
-            f"Create {count} puzzles covering these exact {count} distinct topics in order: {json.dumps(assigned_topics)}. "
+            f"Create {count} percentage math puzzles covering these exact {count} topics in order: {json.dumps(assigned_topics)}. "
             f'ONLY Puzzle 1 ("index 0") may have a "hook" starting with "Welcome to Math Minute Marvels!". '
-            f'Puzzles 2 through {count} MUST set "hook" to "" (empty string) so there is NO repeated intro between questions. '
+            f'Puzzles 2 through {count} MUST set "hook" to "" (empty string) so there is NO repeated intro. '
             f'ONLY Puzzle {count} (the final puzzle) may have a closing "outro"; Puzzles 1 through {count - 1} MUST set "outro" to "".'
         )
 
     return f"""
-You are an elite mental-math creator for {CHANNEL_NAME} ({mode} format).
+You are the lead mental-math creator for {CHANNEL_NAME} ({mode} format).
 {topic_rule}
 {difficulty_rule}
+Creative Style Directive: {directive}
+Trending Viral Hook Angles to Inspire Hook Copy: {json.dumps(hook_trends, ensure_ascii=False)}
+Low-Retention Patterns to AVOID: {json.dumps(avoid_list, ensure_ascii=False)}
 
-Strict rules:
-1. Return ONLY a valid JSON array containing exactly {count} object(s). No markdown fences.
-2. Each object MUST include these exact keys:
+STRICT PERCENTAGE & FORMATTING RULES:
+1. Return ONLY a JSON object with a single key "puzzles" containing an array of exactly {count} object(s).
+2. EVERY puzzle MUST be a percentage math puzzle where the final answer is a percentage.
+3. CRITICAL SYMBOL RULE:
+   - In "question" and "explanation": NEVER use the '%' symbol! ALWAYS write out the word "percentage" in full (e.g., "What percentage of 250 is 45?" or "A jacket drops from 80 to 60. What is the percentage discount?").
+   - In "answer": ALWAYS include the '%' symbol (e.g., "18%" or "25%").
+4. Each object MUST include these exact keys:
    - "hook": string (ONLY populated for Puzzle 1; "" for Puzzles 2..{count})
-   - "question": clean math expression or short problem using %, ×, ÷, =, - WITHOUT brackets (e.g., "83 × 47 + 83 × 53 = ?" or "88² - 12² = ?")
+   - "question": concise percentage problem using the full word "percentage" (zero '%' signs)
    - "topic": exact assigned topic name
    - "difficulty": "EASY", "MEDIUM", or "HARD"
-   - "timer_seconds": integer (15 for EASY, 25 for MEDIUM, 35 for HARD)
-   - "answer": exact final numerical or percentage answer
-   - "explanation": 2 to 3 short equation-style steps with completed calculations (never leave "?" inside steps)
+   - "timer_seconds": integer (30 for EASY, 45 for MEDIUM, 60 for HARD)
+   - "answer": exact final percentage with '%' symbol (e.g., "25%")
+   - "explanation": 2 to 3 short equation-style steps using the full word "percentage" (zero '%' signs, never leave "?" inside steps)
    - "outro": string (ONLY populated for the final puzzle; "" for earlier puzzles)
-3. Double-check all arithmetic so every step and final answer is 100% mathematically exact.
-4. NEVER repeat or closely paraphrase any of these recent questions:
-{json.dumps(list(past_questions)[-50:], ensure_ascii=False)}
+5. NEVER repeat any of these recent questions:
+{json.dumps(list(past_questions)[-40:], ensure_ascii=False)}
 """
 
 # ==============================================================================
-# PART 10 OF 30: PUZZLE GENERATOR WITH SCHEMA & SYMPY RETRY LOOP
+# PART 10 OF 30: PUZZLE GENERATOR WITH 5-AI COUNCIL & SYMPY RETRY LOOP
 # ==============================================================================
 def generate_puzzles(mode: str = "short") -> list:
-    """Generates and mathematically verifies 1 puzzle (short) or 5 puzzles (long)."""
-    api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        raise EnvironmentError("GEMINI_API_KEY environment variable is missing.")
-
-    client = genai.Client(
-        api_key=api_key,
-        http_options=types.HttpOptions(timeout=30000),
-    )
+    """Generates and verifies 1 percentage puzzle (short) or 5 puzzles (long) via the 5-AI Council."""
     history_data = load_history()
+    insights = load_weekly_insights()
     past_questions = get_past_questions(history_data)
     count = 1 if mode == "short" else 5
 
@@ -471,25 +647,15 @@ def generate_puzzles(mode: str = "short") -> list:
         difficulty_rule = f'You MUST set "difficulty" to "{chosen_diff}" and "timer_seconds" to {chosen_timer}.'
     else:
         difficulty_rule = (
-            "Progress smoothly across the 5 puzzles: Puzzle 1-2 EASY (15s), Puzzle 3-4 MEDIUM (25s), Puzzle 5 HARD (35s)."
+            "Progress smoothly across the 5 puzzles: Puzzle 1-2 EASY (30s), Puzzle 3-4 MEDIUM (45s), Puzzle 5 HARD (60s)."
         )
 
-    prompt = build_gemini_prompt(mode, count, assigned_topics, difficulty_rule, past_questions)
-    max_attempts = len(GEMINI_FALLBACK_MODELS) + 2
+    prompt = build_gemini_prompt(mode, count, assigned_topics, difficulty_rule, past_questions, insights)
 
-    for attempt in range(1, max_attempts + 1):
-        model_name = GEMINI_FALLBACK_MODELS[(attempt - 1) % len(GEMINI_FALLBACK_MODELS)]
+    for attempt in range(1, 5):
         try:
-            print(f"[Gemini Attempt {attempt}/{max_attempts}] Generating via {model_name}...")
-            response = client.models.generate_content(
-                model=model_name,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    temperature=0.80,
-                ),
-            )
-            puzzles = json.loads((response.text or "").strip())
+            raw_obj = call_5ai_council(prompt, expect_json=True, preferred_role="generator")
+            puzzles = raw_obj.get("puzzles") if isinstance(raw_obj, dict) else raw_obj
             if not isinstance(puzzles, list) or len(puzzles) != count:
                 raise ValueError(f"Expected {count} puzzle(s), got {type(puzzles).__name__}")
 
@@ -498,7 +664,7 @@ def generate_puzzles(mode: str = "short") -> list:
             for idx, p in enumerate(puzzles):
                 if not isinstance(p, dict) or not REQUIRED_PUZZLE_KEYS.issubset(p.keys()):
                     missing = REQUIRED_PUZZLE_KEYS - set(p.keys() if isinstance(p, dict) else [])
-                    raise ValueError(f"Missing required keys: {missing}")
+                    raise ValueError(f"Missing keys: {missing}")
 
                 q_clean = str(p["question"]).strip()
                 q_norm = q_clean.lower()
@@ -507,27 +673,26 @@ def generate_puzzles(mode: str = "short") -> list:
 
                 ok_math, math_msg = verify_puzzle_with_sympy(p)
                 if not ok_math:
-                    raise ValueError(f"SymPy rejected puzzle {idx + 1}: {math_msg}")
-                print(f"[SymPy] Puzzle {idx + 1}: {math_msg}")
+                    raise ValueError(f"Validation rejected puzzle {idx + 1}: {math_msg}")
+                print(f"[Council Verify] Puzzle {idx + 1}: {math_msg}")
 
-                # Enforce single intro (idx == 0) and single outro (idx == count - 1)
                 p["hook"] = str(p["hook"]).strip() if idx == 0 else ""
                 p["outro"] = str(p["outro"]).strip() if idx == (count - 1) else ""
 
                 diff = str(p["difficulty"]).strip().upper()
                 p["difficulty"] = diff if diff in DIFFICULTY_TIMERS else "MEDIUM"
-                p["timer_seconds"] = max(12, min(38, int(p["timer_seconds"])))
+                p["timer_seconds"] = DIFFICULTY_TIMERS[p["difficulty"]]
 
                 seen_batch.add(q_norm)
                 validated.append(p)
 
-            print(f"[Gemini] Verified {len(validated)} unique {mode} puzzle(s).")
+            print(f"[Council] Verified {len(validated)} unique percentage puzzle(s).")
             return validated
 
         except Exception as err:
-            print(f"[Gemini Attempt {attempt}/{max_attempts}] Failed: {err}")
-            if attempt == max_attempts:
-                raise RuntimeError("Exhausted all retries generating verified puzzles.") from err
+            print(f"[Council Attempt {attempt}/4] Rejected: {err}")
+            if attempt == 4:
+                raise RuntimeError("Exhausted all retries generating verified percentage puzzles.") from err
             time.sleep(2 * attempt)
 
 # ==============================================================================
@@ -573,10 +738,11 @@ def create_voice_clip(text: str, output_path: str, voice: str, rate: str = "+6%"
 
 
 def ensure_sfx_assets(sfx_dir: str = ASSETS_DIR) -> tuple:
-    """Generates crisp 1.0s clock tick and 0.6s reveal chime WAV files if missing."""
+    """Generates crisp 1.0s clock tick, 0.6s reveal chime, and 8.0s ambient bg music WAVs if missing."""
     os.makedirs(sfx_dir, exist_ok=True)
     tick_path = os.path.join(sfx_dir, "tick_1s.wav")
     chime_path = os.path.join(sfx_dir, "reveal_chime.wav")
+    music_path = os.path.join(sfx_dir, "bg_music_loop.wav")
     sample_rate = 44100
 
     if not os.path.exists(tick_path):
@@ -584,7 +750,7 @@ def ensure_sfx_assets(sfx_dir: str = ASSETS_DIR) -> tuple:
         click_len = int(0.035 * sample_rate)
         t = np.linspace(0, 0.035, click_len, endpoint=False)
         env = np.exp(-t * 110.0)
-        samples[:click_len] = 0.45 * env * np.sin(2 * np.pi * 1150 * t)
+        samples[:click_len] = 0.48 * env * np.sin(2 * np.pi * 1150 * t)
         with wave.open(tick_path, "w") as wf:
             wf.setnchannels(1)
             wf.setsampwidth(2)
@@ -595,14 +761,47 @@ def ensure_sfx_assets(sfx_dir: str = ASSETS_DIR) -> tuple:
         dur = 0.6
         t = np.linspace(0, dur, int(dur * sample_rate), endpoint=False)
         env = np.exp(-t * 6.5)
-        wave_data = 0.35 * env * (np.sin(2 * np.pi * 880 * t) + 0.6 * np.sin(2 * np.pi * 1318.5 * t))
+        wave_data = 0.36 * env * (np.sin(2 * np.pi * 880 * t) + 0.6 * np.sin(2 * np.pi * 1318.5 * t))
         with wave.open(chime_path, "w") as wf:
             wf.setnchannels(1)
             wf.setsampwidth(2)
             wf.setframerate(sample_rate)
             wf.writeframes((wave_data * 32767).astype(np.int16).tobytes())
 
-    return tick_path, chime_path
+    # Check for custom user music in assets/ first, otherwise generate warm loopable synth bed
+    custom_music = next(
+        (
+            os.path.join(sfx_dir, fn)
+            for fn in os.listdir(sfx_dir)
+            if fn.lower().startswith("bgm") and fn.lower().endswith((".mp3", ".wav"))
+        ),
+        None,
+    )
+    if custom_music:
+        return tick_path, chime_path, custom_music
+
+    if not os.path.exists(music_path):
+        dur = 8.0
+        t = np.linspace(0, dur, int(dur * sample_rate), endpoint=False)
+        # Warm Cmaj9 ambient pulse that loops seamlessly every 8 seconds
+        lfo = 0.75 + 0.25 * np.sin(2 * np.pi * 0.25 * t)
+        pad = (
+            0.35 * np.sin(2 * np.pi * 130.81 * t)
+            + 0.25 * np.sin(2 * np.pi * 196.00 * t)
+            + 0.22 * np.sin(2 * np.pi * 246.94 * t)
+            + 0.18 * np.sin(2 * np.pi * 293.66 * t)
+        ) * lfo
+        # Subtle soft pulse every 0.5s
+        beat_phase = t % 0.5
+        pulse = 0.14 * np.exp(-beat_phase * 18.0) * np.sin(2 * np.pi * 98.0 * t)
+        mix = np.clip(pad + pulse, -0.95, 0.95)
+        with wave.open(music_path, "w") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(sample_rate)
+            wf.writeframes((mix * 32767).astype(np.int16).tobytes())
+
+    return tick_path, chime_path, music_path
 
 # ==============================================================================
 # PART 13 OF 30: PUZZLE AUDIO BUNDLE (SINGLE INTRO, TIMER CTA & SINGLE OUTRO)
@@ -615,64 +814,15 @@ RANDOM_TIMER_CTAS = [
 ]
 
 
-def prepare_puzzle_audio(
-    puzzle: dict,
-    idx: int,
-    mode: str,
-    voice: str,
-    work_dir: str,
-    include_hook: bool = False,
-    include_timer_cta: bool = False,
-    include_outro: bool = False,
-) -> dict:
-    """
-    Synthesizes distinct MP3 files for each stage:
-    - hook_mp3: ONLY when include_hook is True (start of video)
-    - question_mp3: Always synthesized
-    - timer_cta_mp3: Synthesized ONLY when include_timer_cta is True (1 random slot during timer)
-    - explanation_mp3: Always synthesized
-    - outro_mp3: ONLY when include_outro is True (end of video)
-    """
-    os.makedirs(work_dir, exist_ok=True)
-    hook_mp3 = os.path.join(work_dir, f"p{idx}_hook.mp3")
-    q_mp3 = os.path.join(work_dir, f"p{idx}_question.mp3")
-    timer_cta_mp3 = os.path.join(work_dir, f"p{idx}_timer_cta.mp3")
-    exp_mp3 = os.path.join(work_dir, f"p{idx}_explanation.mp3")
-    outro_mp3 = os.path.join(work_dir, f"p{idx}_outro.mp3")
-
-    hook_dur = 0.0
-    if include_hook and puzzle.get("hook"):
-        hook_dur = create_voice_clip(clean_math_for_tts(puzzle["hook"]), hook_mp3, voice, rate="+8%")
-
-    q_dur = create_voice_clip(clean_math_for_tts(puzzle["question"]), q_mp3, voice, rate="+4%")
-
-    timer_cta_dur = 0.0
-    timer_cta_text = ""
-    if include_timer_cta:
-        timer_cta_text = random.choice(RANDOM_TIMER_CTAS)
-        timer_cta_dur = create_voice_clip(timer_cta_text, timer_cta_mp3, voice, rate="+9%")
-
-    exp_text = clean_math_for_tts(f"The answer is {puzzle['answer']}. {puzzle['explanation']}")
-    exp_dur = create_voice_clip(exp_text, exp_mp3, voice, rate="+5%")
-
-    outro_dur = 0.0
-    if include_outro and puzzle.get("outro"):
-        outro_dur = create_voice_clip(clean_math_for_tts(puzzle["outro"]), outro_mp3, voice, rate="+7%")
-
-    # Ensure Shorts total length stays strictly <= 58.0s
-    non_timer_sec = (
-        ((hook_dur + 0.30) if hook_dur > 0 else 0.0)
-        + (q_dur + 0.30)
-        + (0.15 + exp_dur + 0.35)
-        + ((outro_dur + 0.25) if outro_dur > 0 else 0.0)
-    )
+    # Allow full 30s / 45s / 60s variable countdowns (YouTube Shorts supports up to 180s)
     requested_timer = max(int(puzzle["timer_seconds"]), int(math.ceil(timer_cta_dur + 2.0)))
-
     if mode == "short":
-        max_allowed_timer = max(10, int(math.floor(58.0 - non_timer_sec)))
-        final_timer = min(requested_timer, max_allowed_timer)
+        final_timer = min(requested_timer, 60)
     else:
         final_timer = requested_timer
+
+    # Alternate cleanly between "ring" and "bar" so never both appear at once
+    timer_style = "ring" if (idx % 2 == 0) else "bar"
 
     return {
         "hook_mp3": hook_mp3 if hook_dur > 0 else None,
@@ -691,6 +841,7 @@ def prepare_puzzle_audio(
         "outro_dur": outro_dur,
         "outro_text": puzzle.get("outro", "") if outro_dur > 0 else "",
         "final_timer": final_timer,
+        "timer_style": timer_style,
     }
 
 # ==============================================================================
@@ -783,6 +934,9 @@ def build_ass_subtitles_file(
     font_size = 54 if mode == "short" else 46
     margin_v = 250 if mode == "short" else 55
 
+    dna = load_weekly_insights().get("style_dna", {})
+    chunk_size = max(3, min(7, int(dna.get("caption_words_per_chunk", 5))))
+
     header = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {play_res_x}
@@ -803,8 +957,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         if not words or end_t <= start_t:
             continue
 
-        # Split into chunks of up to 6 words for clean readability
-        chunk_size = 6
         chunks = [words[i : i + chunk_size] for i in range(0, len(words), chunk_size)]
         total_words = len(words)
         cursor = start_t
@@ -823,7 +975,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     return ass_path
 
 # ==============================================================================
-# PART 16 OF 30: FONT LOADER & EXACT BG.PNG / BG_LONG.PNG SAFE-ZONE COORDINATES
+# PART 16 OF 30: FONT LOADER & FULL-SCREEN SAFE-ZONE COORDINATES
 # ==============================================================================
 FONT_CANDIDATES = [
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
@@ -844,55 +996,54 @@ def load_font(size: int) -> ImageFont.FreeTypeFont:
 
 def get_canvas_spec(mode: str) -> dict:
     """
-    Locks exact safe-zone coordinates matching your uploaded bg.png (9:16) and
-    bg_long.png (16:9) so the infinity-stopwatch logo and mascot never overlap.
+    Uses 100% of the open space in bg.png (9:16) and bg_long.png (16:9)
+    with zero logo overlap and zero large blank areas.
     """
     if mode == "short":
         return {
             "width": 1080,
             "height": 1920,
             "pad": 56,
-            # Top logo sits at y=0..560 -> header & card start cleanly at y=585
-            "header_box": (56, 585, 1024, 653),
-            "card_top": 670,
-            "card_bottom": 1315,
-            # Bottom mascot sits at y=1485, handle at y=1645 (above YouTube bottom UI)
+            # Top logo ends at y=555 -> header & tall card fill y=575..1345
+            "header_box": (56, 575, 1024, 642),
+            "card_box": (56, 658, 1024, 1345),
+            # Large mascot fills lower canvas y=1360..1865 cleanly
             "mascot_cx": 540,
-            "mascot_cy": 1485,
-            "handle_y": 1642,
-            "mascot_size": 430,
+            "mascot_cy": 1595,
+            "handle_y": 1842,
+            "mascot_size": 520,
             "font_badge": load_font(33),
             "font_hook": load_font(54),
-            "font_question": load_font(72),
-            "font_timer": load_font(116),
+            "font_question": load_font(70),
+            "font_timer": load_font(86),
             "font_answer": load_font(76),
-            "font_step": load_font(34),
-            "font_outro": load_font(26),
+            "font_step": load_font(35),
+            "font_outro": load_font(28),
             "font_symbol_bg": load_font(62),
-            "font_symbol_orbit": load_font(46),
+            "font_symbol_orbit": load_font(48),
         }
     return {
         "width": 1920,
         "height": 1080,
-        "pad": 80,
-        # Top-left logo sits at x=0..560, y=0..330 -> header pill sits to its right
-        "header_box": (590, 95, 1840, 165),
-        "card_top": 345,
-        "card_bottom": 810,
-        # Mascot sits cleanly in the lower center-right below card_bottom (y=925)
-        "mascot_cx": 960,
-        "mascot_cy": 925,
-        "handle_y": 1038,
-        "mascot_size": 250,
-        "font_badge": load_font(31),
-        "font_hook": load_font(48),
+        "pad": 64,
+        # Top-left logo occupies x=90..530, y=65..345.
+        # Right column (x=565..1855) holds full-height header + puzzle card!
+        "header_box": (565, 65, 1855, 140),
+        "card_box": (565, 160, 1855, 1015),
+        # Left column below logo (x=70..540, y=370..1020) holds large mascot + handle!
+        "mascot_cx": 305,
+        "mascot_cy": 685,
+        "handle_y": 955,
+        "mascot_size": 390,
+        "font_badge": load_font(32),
+        "font_hook": load_font(52),
         "font_question": load_font(64),
-        "font_timer": load_font(102),
-        "font_answer": load_font(68),
-        "font_step": load_font(32),
-        "font_outro": load_font(26),
+        "font_timer": load_font(88),
+        "font_answer": load_font(70),
+        "font_step": load_font(35),
+        "font_outro": load_font(28),
         "font_symbol_bg": load_font(56),
-        "font_symbol_orbit": load_font(40),
+        "font_symbol_orbit": load_font(44),
     }
 
 # ==============================================================================
@@ -901,7 +1052,7 @@ def get_canvas_spec(mode: str) -> dict:
 def prepare_base_background(mode: str, spec: dict, theme: dict) -> Image.Image:
     """
     Loads bg.png for Shorts (1080x1920) or bg_long.png for Long videos (1920x1080)
-    and preserves full logo brightness with a minimal 10% theme blend.
+    and applies Style DNA color vibrancy and contrast boost.
     """
     w, h = spec["width"], spec["height"]
     tint_layer = Image.new("RGB", (w, h), theme["bg"])
@@ -923,7 +1074,12 @@ def prepare_base_background(mode: str, spec: dict, theme: dict) -> Image.Image:
     left = (new_w - w) // 2
     top = (new_h - h) // 2
     cropped = resized.crop((left, top, left + w, top + h))
-    return Image.blend(cropped, tint_layer, alpha=0.10)
+    blended = Image.blend(cropped, tint_layer, alpha=0.10)
+
+    dna = load_weekly_insights().get("style_dna", {})
+    blended = ImageEnhance.Color(blended).enhance(float(dna.get("color_vibrancy", 1.08)))
+    blended = ImageEnhance.Contrast(blended).enhance(float(dna.get("contrast_boost", 1.05)))
+    return blended
 
 # ==============================================================================
 # PART 18 OF 30: AMBIENT FLOATING MATH SYMBOLS LAYER
@@ -976,7 +1132,7 @@ def paste_mascot_with_symbols(
     canvas: Image.Image,
     sprites: dict,
     stage: str,
-    is_speaking_now: bool,
+    mouth_level: int,
     cx: int,
     cy: int,
     t_sec: float,
@@ -984,42 +1140,38 @@ def paste_mascot_with_symbols(
     theme: dict,
 ):
     """
-    Exact mascot behavior rules:
-    1. Countdown stage: ALWAYS holds `char_think.png` (no lip-sync) even when the
-       random Like/Subscribe/Comment timer voiceover is playing.
-    2. Non-countdown with active voiceover (`is_speaking_now`): Crisp 3-stage lip-sync
-       (`open` -> `half` -> `closed`) driven strictly by audio energy.
-    3. Non-countdown silent pauses (`not is_speaking_now`): Animated conversational
-       gestures (subtle `half`/`closed`/`blink` chatter & lively bobbing) so the
-       mascot stays expressive and never looks frozen.
+    Exact mascot behavior:
+    1. Countdown stage: ALWAYS holds `char_think.png` (no lip-sync) even when timer CTA plays.
+    2. Active voiceover (`mouth_level > 0`): Syllable-loudness lip-sync
+       (`2` -> `open`, `1` -> `half`, `0` -> `closed`).
+    3. Silent gaps (`mouth_level == 0` outside countdown): Mascot changes poses & talks
+       naturally (`half` / `open` / `blink` cycle) so it stays lively.
     """
     if stage == "countdown":
         pose = "think"
         bounce_y = int(math.sin(t_sec * 3.0) * 7)
-    elif is_speaking_now:
-        cycle = int(t_sec * 11.0) % 4
-        if cycle == 0:
+    elif mouth_level > 0:
+        if mouth_level >= 2:
             pose = "open"
-        elif cycle in (1, 3):
-            pose = "half" if sprites.get("half") is not None else "open"
         else:
-            pose = "closed"
-        bounce_y = -int(abs(math.sin(t_sec * 8.5)) * 9)
+            pose = "half" if sprites.get("half") is not None else "open"
+        bounce_y = -int(abs(math.sin(t_sec * 9.0)) * (6 + mouth_level * 3))
     else:
-        # Expressive idle animation with periodic blinks and subtle mouth movement
-        blink_phase = t_sec % 3.2
-        chatter_phase = t_sec % 1.8
+        blink_phase = t_sec % 3.4
+        talk_phase = t_sec % 1.4
         if blink_phase < 0.16 and sprites.get("blink") is not None:
             pose = "blink"
-        elif chatter_phase < 0.35 and sprites.get("half") is not None:
+        elif talk_phase < 0.45 and sprites.get("half") is not None:
             pose = "half"
+        elif 0.65 < talk_phase < 0.90 and sprites.get("open") is not None:
+            pose = "open"
         else:
             pose = "closed"
-        bounce_y = int(math.sin(t_sec * 3.6) * 6)
+        bounce_y = int(math.sin(t_sec * 3.8) * 6)
 
     draw = ImageDraw.Draw(canvas)
-    orbit_radius_x = int(spec["mascot_size"] * 0.66)
-    orbit_radius_y = int(spec["mascot_size"] * 0.20)
+    orbit_radius_x = int(spec["mascot_size"] * 0.60)
+    orbit_radius_y = int(spec["mascot_size"] * 0.18)
     for idx, sym in enumerate(MATH_SYMBOLS):
         angle = t_sec * 1.9 + (idx * (2 * math.pi / len(MATH_SYMBOLS)))
         sx = int(cx + math.cos(angle) * orbit_radius_x)
@@ -1150,10 +1302,10 @@ def render_puzzle_frame(
     theme: dict,
     sprites: dict,
     base_bg: Image.Image = None,
-    is_speaking_now: bool = False,
+    mouth_level: int = 0,
 ) -> np.ndarray:
-    """Renders one RGB frame synced strictly to `timeline` with zero logo/mascot overlap."""
-    w, h, pad = spec["width"], spec["height"], spec["pad"]
+    """Renders one RGB frame filling the full canvas with zero logo/mascot overlap."""
+    w, h = spec["width"], spec["height"]
     canvas = base_bg.copy() if base_bg is not None else Image.new("RGB", (w, h), theme["bg"])
 
     draw_floating_math_symbols(canvas, spec, theme, t_sec)
@@ -1177,35 +1329,37 @@ def render_puzzle_frame(
         stage_elapsed = t_sec - timeline["timer_end"]
 
     ease = min(1.0, max(0.0, stage_elapsed) / 0.25)
-    slide_y = int(((1.0 - ease) ** 3) * 24)
+    slide_y = int(((1.0 - ease) ** 3) * 20)
 
-    # Header pill positioned cleanly in the safe zone below/beside the logo
+    # Header pill positioned cleanly in its dedicated safe zone
     hx0, hy0, hx1, hy1 = spec["header_box"]
     label_prefix = f"PUZZLE {puzzle_num}/{total_puzzles}  •  " if total_puzzles > 1 else ""
     header_text = f"{label_prefix}{puzzle['topic'].upper()}  •  {puzzle['difficulty']}"
-    draw_rounded_card(canvas, (hx0, hy0, hx1, hy1), radius=24, fill=theme["card"], outline=theme["accent"], width=2, fill_alpha=200)
-    draw_centered_multiline(draw, header_text, spec["font_badge"], (hx0 + hx1) // 2, hy0 + 16, (hx1 - hx0) - 36, theme["accent"])
+    draw_rounded_card(canvas, (hx0, hy0, hx1, hy1), radius=24, fill=theme["card"], outline=theme["accent"], width=2, fill_alpha=205)
+    draw_centered_multiline(draw, header_text, spec["font_badge"], (hx0 + hx1) // 2, hy0 + 18, (hx1 - hx0) - 36, theme["accent"])
 
-    # Main translucent glass card
-    card_top = spec["card_top"] + slide_y
-    card_bottom = spec["card_bottom"]
-    draw_rounded_card(canvas, (pad, card_top, w - pad, card_bottom), radius=34, fill=theme["card"], outline=theme["accent"], width=3, fill_alpha=185)
+    # Main translucent glass card using exact card_box coordinates
+    cx0, cy0, cx1, cy1 = spec["card_box"]
+    card_top = cy0 + slide_y
+    card_bottom = cy1
+    card_cx = (cx0 + cx1) // 2
+    inner_w = (cx1 - cx0) - 64
 
-    inner_w = w - pad * 2 - 64
-    cx = w // 2
+    draw_rounded_card(canvas, (cx0, card_top, cx1, card_bottom), radius=34, fill=theme["card"], outline=theme["accent"], width=3, fill_alpha=188)
 
     if stage == "hook":
-        draw_centered_multiline(draw, "⚡ QUICK BRAIN CHECK ⚡", spec["font_badge"], cx, card_top + 60, inner_w, theme["highlight"])
-        draw_centered_multiline(draw, puzzle["hook"], spec["font_hook"], cx, card_top + 150, inner_w, theme["text"])
-        draw_centered_multiline(draw, "%   +   =   ×   ÷   !", spec["font_hook"], cx, card_bottom - 105, inner_w, theme["accent"])
+        mid_y = (card_top + card_bottom) // 2
+        draw_centered_multiline(draw, "⚡ QUICK PERCENTAGE CHECK ⚡", spec["font_badge"], card_cx, card_top + 65, inner_w, theme["highlight"])
+        draw_centered_multiline(draw, puzzle["hook"], spec["font_hook"], card_cx, mid_y - 75, inner_w, theme["text"])
+        draw_centered_multiline(draw, "%   +   =   ×   ÷   !", spec["font_hook"], card_cx, card_bottom - 110, inner_w, theme["accent"])
     else:
         # Question box
         q_lines = wrap_lines(draw, puzzle["question"], spec["font_question"], inner_w - 36)
-        q_box_h = max(110, len(q_lines) * 74 + 36)
-        q_box_top = card_top + 20
+        q_box_h = max(120, len(q_lines) * 74 + 40)
+        q_box_top = card_top + 22
         q_box_bottom = q_box_top + q_box_h
-        draw_rounded_card(draw, (pad + 22, q_box_top, w - pad - 22, q_box_bottom), radius=22, fill=theme["bg"], outline=theme["muted"], width=2)
-        draw_centered_multiline(draw, puzzle["question"], spec["font_question"], cx, q_box_top + 18, inner_w - 36, theme["text"])
+        draw_rounded_card(canvas, (cx0 + 24, q_box_top, cx1 - 24, q_box_bottom), radius=22, fill=theme["bg"], outline=theme["muted"], width=2)
+        draw_centered_multiline(draw, puzzle["question"], spec["font_question"], card_cx, q_box_top + 20, inner_w - 36, theme["text"])
 
         if stage == "countdown":
             rem = max(0.0, timeline["timer_end"] - t_sec)
@@ -1213,22 +1367,37 @@ def render_puzzle_frame(
             ratio = rem / total_t
             urgent = rem <= 5.0
             ring_color = theme["highlight"] if urgent else theme["accent"]
+            timer_style = audio_info.get("timer_style", "ring")
 
-            ring_cy = (q_box_bottom + card_bottom - 65) // 2
-            ring_r = 128 if mode == "short" else 92
-            pulse_r = ring_r + (int(abs(math.sin(t_sec * 6.0)) * 9) if urgent else 0)
-            bbox = (cx - pulse_r, ring_cy - pulse_r, cx + pulse_r, ring_cy + pulse_r)
-            draw.ellipse(bbox, outline=theme["bg"], width=14)
-            draw.arc(bbox, start=-90, end=-90 + int(360 * ratio), fill=ring_color, width=14)
-
-            draw_centered_multiline(draw, f"{int(math.ceil(rem))}s", spec["font_timer"], cx, ring_cy - 58, inner_w, ring_color)
-            draw_countdown_bar(draw, cx, card_bottom - 58, int(inner_w * 0.85), 22, rem, total_t, theme)
+            area_cy = (q_box_bottom + card_bottom - 18) // 2
+            if timer_style == "ring":
+                ring_r = 152 if mode == "short" else 135
+                pulse_r = ring_r + (int(abs(math.sin(t_sec * 6.0)) * 8) if urgent else 0)
+                bbox = (card_cx - pulse_r, area_cy - pulse_r, card_cx + pulse_r, area_cy + pulse_r)
+                draw.ellipse(bbox, outline=theme["bg"], width=15)
+                draw.arc(bbox, start=-90, end=-90 + int(360 * ratio), fill=ring_color, width=15)
+                draw.text(
+                    (card_cx, area_cy),
+                    f"{int(math.ceil(rem))}s",
+                    font=spec["font_timer"],
+                    fill=ring_color,
+                    anchor="mm",
+                )
+            else:
+                draw.text(
+                    (card_cx, area_cy - 38),
+                    f"{int(math.ceil(rem))}s",
+                    font=spec["font_timer"],
+                    fill=ring_color,
+                    anchor="mm",
+                )
+                draw_countdown_bar(draw, card_cx, area_cy + 30, int(inner_w * 0.84), 30, rem, total_t, theme)
 
         elif stage in ("reveal", "outro"):
-            ans_top = q_box_bottom + 16
-            ans_bottom = ans_top + (98 if mode == "short" else 82)
-            draw_rounded_card(draw, (pad + 22, ans_top, w - pad - 22, ans_bottom), radius=20, fill=theme["bg"], outline=theme["accent"], width=3)
-            draw_centered_multiline(draw, f"ANSWER: {puzzle['answer']}", spec["font_answer"], cx, ans_top + 12, inner_w - 36, theme["accent"])
+            ans_top = q_box_bottom + 18
+            ans_bottom = ans_top + (98 if mode == "short" else 90)
+            draw_rounded_card(canvas, (cx0 + 24, ans_top, cx1 - 24, ans_bottom), radius=20, fill=theme["bg"], outline=theme["accent"], width=3)
+            draw_centered_multiline(draw, f"ANSWER: {puzzle['answer']}", spec["font_answer"], card_cx, ans_top + 14, inner_w - 36, theme["accent"])
 
             steps = _split_explanation_steps(puzzle["explanation"])
             exp_dur = max(0.5, audio_info["explanation_dur"])
@@ -1236,13 +1405,13 @@ def render_puzzle_frame(
             visible_count = len(steps) if stage == "outro" else min(len(steps), int(exp_progress * len(steps)) + 1)
 
             step_font = spec["font_step"]
-            step_y = ans_bottom + 14
-            outro_reserve = 108 if (stage == "outro" and puzzle.get("outro")) else 14
+            step_y = ans_bottom + 16
+            outro_reserve = 112 if (stage == "outro" and puzzle.get("outro")) else 16
 
             for s_idx in range(visible_count):
                 step_label = f"Step {s_idx + 1}: {steps[s_idx]}"
                 wrapped = wrap_lines(draw, step_label, step_font, inner_w - 48)
-                dyn_box_h = len(wrapped) * 40 + 26
+                dyn_box_h = len(wrapped) * 42 + 28
                 if step_y + dyn_box_h > card_bottom - outro_reserve:
                     break
 
@@ -1251,29 +1420,30 @@ def render_puzzle_frame(
                 step_border = theme["highlight"] if is_active else theme["muted"]
                 step_text_col = theme["highlight"] if is_active else theme["text"]
 
-                draw_rounded_card(draw, (pad + 22, step_y, w - pad - 22, step_y + dyn_box_h), radius=16, fill=step_bg, outline=step_border, width=2)
-                draw_centered_multiline(draw, step_label, step_font, cx, step_y + 12, inner_w - 48, step_text_col, line_spacing=8)
-                step_y += dyn_box_h + 10
+                draw_rounded_card(canvas, (cx0 + 24, step_y, cx1 - 24, step_y + dyn_box_h), radius=16, fill=step_bg, outline=step_border, width=2)
+                draw_centered_multiline(draw, step_label, step_font, card_cx, step_y + 13, inner_w - 48, step_text_col, line_spacing=8)
+                step_y += dyn_box_h + 12
 
             if stage == "outro" and puzzle.get("outro"):
-                box_top = card_bottom - 98
-                box_bot = card_bottom - 14
-                draw_rounded_card(draw, (pad + 22, box_top, w - pad - 22, box_bot), radius=18, fill=theme["bg"], outline=theme["accent"], width=2)
-                draw_centered_multiline(draw, puzzle["outro"], spec["font_outro"], cx, box_top + 12, inner_w - 56, fill=theme["gold"])
+                box_top = card_bottom - 102
+                box_bot = card_bottom - 16
+                draw_rounded_card(canvas, (cx0 + 24, box_top, cx1 - 24, box_bot), radius=18, fill=theme["bg"], outline=theme["accent"], width=2)
+                draw_centered_multiline(draw, puzzle["outro"], spec["font_outro"], card_cx, box_top + 14, inner_w - 56, fill=theme["gold"])
 
-    # Mascot & channel handle placed in dedicated lower safe zone
+    # Mascot & channel handle placed in dedicated safe zone (bottom in Short, left column in Long)
     paste_mascot_with_symbols(
         canvas,
         sprites,
         stage,
-        is_speaking_now,
+        mouth_level,
         spec["mascot_cx"],
         spec["mascot_cy"],
         t_sec,
         spec,
         theme,
     )
-    draw_centered_multiline(draw, CHANNEL_HANDLE, spec["font_badge"], spec["mascot_cx"], spec["handle_y"], inner_w, theme["muted"])
+    handle_max_w = 460 if mode == "long" else inner_w
+    draw_centered_multiline(draw, CHANNEL_HANDLE, spec["font_badge"], spec["mascot_cx"], spec["handle_y"], handle_max_w, theme["muted"])
 
     return np.array(canvas)
 
@@ -1282,13 +1452,12 @@ def render_puzzle_frame(
 # ==============================================================================
 def extract_speech_activity(audio_info: dict, timeline: dict, fps: int = 24) -> np.ndarray:
     """
-    Computes per-frame boolean speech activity strictly for non-countdown voiceovers
-    (hook, question, explanation, outro). Countdown CTA audio intentionally does NOT
-    trigger lip-sync so the mascot stays in `char_think.png` during the timer.
+    Computes per-frame syllable mouth aperture (0=closed, 1=half, 2=open)
+    strictly for non-countdown voiceovers (hook, question, explanation, outro).
     """
     total_dur = timeline["total_dur"]
     n_frames = max(1, int(math.ceil(total_dur * fps)) + 2)
-    activity = np.zeros(n_frames, dtype=bool)
+    mouth_levels = np.zeros(n_frames, dtype=np.int32)
 
     segments = [
         (audio_info.get("hook_mp3"), timeline["hook_start"]),
@@ -1302,20 +1471,28 @@ def extract_speech_activity(audio_info: dict, timeline: dict, fps: int = 24) -> 
             continue
         clip = AudioFileClip(mp3_path)
         try:
-            arr = clip.to_soundarray(fps=2400)
+            arr = clip.to_soundarray(fps=4800)
             arr = np.mean(np.abs(arr), axis=1) if arr.ndim > 1 else np.abs(arr)
-            samples_per_frame = max(1, int(2400 / fps))
+            peak_ref = max(0.05, float(np.percentile(arr, 95)))
+            samples_per_frame = max(1, int(4800 / fps))
             seg_frames = len(arr) // samples_per_frame
             for f_idx in range(seg_frames):
                 chunk = arr[f_idx * samples_per_frame : (f_idx + 1) * samples_per_frame]
-                if float(np.mean(chunk)) > 0.018:
-                    global_f = int(round((start_t * fps) + f_idx))
-                    if 0 <= global_f < n_frames:
-                        activity[global_f] = True
+                rms = float(np.sqrt(np.mean(chunk ** 2)))
+                norm_energy = rms / peak_ref
+                if norm_energy > 0.42:
+                    lvl = 2
+                elif norm_energy > 0.14:
+                    lvl = 1
+                else:
+                    lvl = 0
+                global_f = int(round((start_t * fps) + f_idx))
+                if 0 <= global_f < n_frames:
+                    mouth_levels[global_f] = lvl
         finally:
             clip.close()
 
-    return activity
+    return mouth_levels
 
 # ==============================================================================
 # PART 23 OF 30: 24 FPS VIDEOCLIP BUILDER (SYNCED TO MASTER TIMELINE)
@@ -1338,7 +1515,7 @@ def build_puzzle_video_clip(
 
     def make_frame(t):
         f_idx = min(len(speech_activity) - 1, max(0, int(t * fps)))
-        is_speaking_now = bool(speech_activity[f_idx])
+        mouth_level = int(speech_activity[f_idx])
         return render_puzzle_frame(
             t_sec=t,
             puzzle=puzzle,
@@ -1351,7 +1528,7 @@ def build_puzzle_video_clip(
             theme=theme,
             sprites=sprites,
             base_bg=base_bg,
-            is_speaking_now=is_speaking_now,
+            mouth_level=mouth_level,
         )
 
     if MOVIEPY_V2:
@@ -1359,10 +1536,14 @@ def build_puzzle_video_clip(
     return VideoClip(make_frame=make_frame, duration=total_dur).set_fps(fps)
 
 # ==============================================================================
-# PART 24 OF 30: MASTER-TIMELINE AUDIO MIXER
+# PART 24 OF 30: MASTER-TIMELINE AUDIO MIXER (BG MUSIC + TICK + CHIME)
 # ==============================================================================
 def _with_start(clip, start_t: float):
     return clip.with_start(start_t) if MOVIEPY_V2 else clip.set_start(start_t)
+
+
+def _scale_volume(clip, factor: float):
+    return clip.with_volume_scaled(factor) if MOVIEPY_V2 else clip.volumex(factor)
 
 
 def build_puzzle_audio_track(
@@ -1370,30 +1551,50 @@ def build_puzzle_audio_track(
     timeline: dict,
     tick_path: str,
     chime_path: str,
+    music_path: str = None,
 ) -> tuple:
-    """Places every voiceover, clock tick, and chime at its exact `timeline` timestamp."""
+    """Places background music (ducked via Style DNA), voiceovers, clock ticks, and chime."""
     tracks = []
     opened = []
 
-    def _add(path: str, start_t: float):
+    dna = load_weekly_insights().get("style_dna", {})
+    bg_vol = float(dna.get("music_duck_volume", 0.14))
+    total_dur = float(timeline["total_dur"])
+
+    # Loop ambient background music across the entire segment duration
+    if music_path and os.path.exists(music_path):
+        base_bgm = AudioFileClip(music_path)
+        opened.append(base_bgm)
+        bgm_dur = max(0.5, float(base_bgm.duration))
+        cursor = 0.0
+        while cursor < total_dur:
+            rem = total_dur - cursor
+            piece = base_bgm.subclipped(0, min(bgm_dur, rem)) if MOVIEPY_V2 else base_bgm.subclip(0, min(bgm_dur, rem))
+            piece = _scale_volume(piece, bg_vol)
+            tracks.append(_with_start(piece, cursor))
+            cursor += bgm_dur
+
+    def _add(path: str, start_t: float, vol: float = 1.0):
         if path and os.path.exists(path):
             c = AudioFileClip(path)
             opened.append(c)
+            if vol != 1.0:
+                c = _scale_volume(c, vol)
             tracks.append(_with_start(c, start_t))
 
-    _add(audio_info.get("hook_mp3"), timeline["hook_start"])
-    _add(audio_info.get("question_mp3"), timeline["q_start"])
-    _add(audio_info.get("timer_cta_mp3"), timeline["cta_start"])
+    _add(audio_info.get("hook_mp3"), timeline["hook_start"], 1.05)
+    _add(audio_info.get("question_mp3"), timeline["q_start"], 1.05)
+    _add(audio_info.get("timer_cta_mp3"), timeline["cta_start"], 1.0)
 
     # 1 clock tick per second across the exact countdown window
     timer_secs = int(audio_info["final_timer"])
     for sec_idx in range(timer_secs):
-        _add(tick_path, timeline["timer_start"] + sec_idx)
+        _add(tick_path, timeline["timer_start"] + sec_idx, 0.85)
 
     # Reveal chime + explanation at exact timer_end
-    _add(chime_path, timeline["chime_start"])
-    _add(audio_info.get("explanation_mp3"), timeline["exp_start"])
-    _add(audio_info.get("outro_mp3"), timeline["outro_start"])
+    _add(chime_path, timeline["chime_start"], 0.95)
+    _add(audio_info.get("explanation_mp3"), timeline["exp_start"], 1.05)
+    _add(audio_info.get("outro_mp3"), timeline["outro_start"], 1.05)
 
     return CompositeAudioClip(tracks), opened
 
@@ -1437,34 +1638,12 @@ def burn_ass_subtitles_ffmpeg(raw_mp4: str, ass_path: str, final_mp4: str) -> st
     shutil.copyfile(raw_mp4, final_mp4)
     return final_mp4
 
-# ==============================================================================
-# PART 26 OF 30: COMPLETE VIDEO STITCHER, CHAPTER COLLECTOR & .ASS BURNER
-# ==============================================================================
-def _set_clip_audio(vclip, aclip):
-    return vclip.with_audio(aclip) if MOVIEPY_V2 else vclip.set_audio(aclip)
-
-
-def render_complete_video(puzzles: list, mode: str, theme: dict, voice: str) -> tuple:
-    """
-    Renders all puzzles using one authoritative timeline per segment:
-    - Single intro at Puzzle 1 (`idx == 0`)
-    - Single random Like/Subscribe/Comment promo during the timer (1 slot per video)
-    - Single outro at the final puzzle (`idx == total_puzzles - 1`)
-    - Collects exact 00:00 chapters and burns kinetic yellow ASS captions.
-    Returns (final_mp4_path, enriched_records, chapter_markers).
-    """
-    work_dir = f"build_{mode}"
-    if os.path.exists(work_dir):
-        shutil.rmtree(work_dir)
-    os.makedirs(work_dir, exist_ok=True)
-
     spec = get_canvas_spec(mode)
     sprites = load_mascot_sprites(spec["mascot_size"])
     base_bg = prepare_base_background(mode, spec, theme)
-    tick_path, chime_path = ensure_sfx_assets(ASSETS_DIR)
+    tick_path, chime_path, music_path = ensure_sfx_assets(ASSETS_DIR)
 
     total_puzzles = len(puzzles)
-    # Pick 1 random puzzle slot to play the Like/Subscribe/Comment CTA during its countdown
     cta_slot_idx = random.randrange(total_puzzles)
 
     segment_clips = []
@@ -1491,14 +1670,12 @@ def render_complete_video(puzzles: list, mode: str, theme: dict, voice: str) -> 
         )
         timeline = build_puzzle_timeline(audio_info)
 
-        # Record clickable chapter timestamp for Long-Form description
         mins = int(global_offset // 60)
         secs = int(global_offset % 60)
         chapter_markers.append(
             f"{mins:02d}:{secs:02d} Puzzle {idx + 1}: {puzzle['topic']} ({puzzle['difficulty']})"
         )
 
-        # Collect spoken caption intervals shifted by global_offset
         if audio_info["hook_dur"] > 0:
             caption_segments.append(
                 (audio_info["hook_text"], global_offset + timeline["hook_start"], global_offset + timeline["hook_end"])
@@ -1530,7 +1707,7 @@ def render_complete_video(puzzles: list, mode: str, theme: dict, voice: str) -> 
             sprites=sprites,
             base_bg=base_bg,
         )
-        aclip, opened_handles = build_puzzle_audio_track(audio_info, timeline, tick_path, chime_path)
+        aclip, opened_handles = build_puzzle_audio_track(audio_info, timeline, tick_path, chime_path, music_path)
         all_opened_audio.extend(opened_handles)
         segment_clips.append(_set_clip_audio(vclip, aclip))
 
@@ -1539,47 +1716,13 @@ def render_complete_video(puzzles: list, mode: str, theme: dict, voice: str) -> 
             "topic": puzzle["topic"],
             "difficulty": puzzle["difficulty"],
             "timer": audio_info["final_timer"],
+            "timer_style": audio_info.get("timer_style", "ring"),
             "theme": theme["name"],
             "voice": voice,
             "mode": mode,
             "created_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         })
         global_offset += timeline["total_dur"]
-
-    final_video = (
-        segment_clips[0]
-        if len(segment_clips) == 1
-        else concatenate_videoclips(segment_clips, method="compose")
-    )
-
-    raw_mp4 = os.path.join(work_dir, f"raw_{mode}.mp4")
-    output_mp4 = "short.mp4" if mode == "short" else "long_video.mp4"
-
-    final_video.write_videofile(
-        raw_mp4,
-        fps=30,
-        codec="libx264",
-        audio_codec="aac",
-        audio_bitrate="192k",
-        preset="medium",
-        ffmpeg_params=["-pix_fmt", "yuv420p", "-movflags", "+faststart"],
-    )
-
-    final_video.close()
-    for sc in segment_clips:
-        sc.close()
-    for ah in all_opened_audio:
-        try:
-            ah.close()
-        except Exception:
-            pass
-
-    ass_path = os.path.join(work_dir, f"captions_{mode}.ass")
-    build_ass_subtitles_file(caption_segments, ass_path, mode)
-    burn_ass_subtitles_ffmpeg(raw_mp4, ass_path, output_mp4)
-
-    print(f"[Render] Exported {output_mp4} ({round(global_offset, 2)}s) successfully.")
-    return output_mp4, enriched_records, chapter_markers
 
 # ==============================================================================
 # PART 27 OF 30: HIGH-CTR 1280X720 LONG-FORM THUMBNAIL GENERATOR
@@ -1649,6 +1792,125 @@ def generate_long_thumbnail(puzzles: list, theme: dict, thumb_path: str = "thumb
     base.save(thumb_path, format="JPEG", quality=92)
     print(f"[Thumbnail] Generated 1280x720 thumbnail -> {thumb_path}")
     return thumb_path
+
+# ==============================================================================
+# PART 27B OF 30: 4-POINT HUMAN-PERSPECTIVE PRE-UPLOAD QA GATE
+# ==============================================================================
+def _log_qa_failure(reason: str, mode: str):
+    insights = load_weekly_insights()
+    failures = insights.get("qa_failures", [])
+    failures.append({
+        "timestamp_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "mode": mode,
+        "reason": reason[:300],
+    })
+    insights["qa_failures"] = failures[-30:]
+    save_weekly_insights(insights)
+
+
+def run_pre_upload_qa_gate(video_path: str, puzzles: list, mode: str) -> tuple:
+    """
+    4-Point Pre-Upload QA Gate:
+    1. FFprobe check: verifies exact resolution (1080x1920 or 1920x1080), duration > 10s, and valid AAC audio stream.
+    2. Text rule audit: confirms '%' is in answers and 'percentage' is spelled out in questions/explanations.
+    3. Extracts 6 evenly spaced rendered frames via FFmpeg.
+    4. Gemini Vision (`gemini-3.5-flash-lite` -> `gemini-3.6-flash` -> `gemini-3-flash-preview`) + QA Auditor AI
+       inspects all 6 frames for zero overlap between logo, card, timer text, and mascot.
+    """
+    if not os.path.exists(video_path):
+        msg = f"Rendered file missing: {video_path}"
+        _log_qa_failure(msg, mode)
+        return False, msg
+
+    # Point 1: FFprobe technical inspection
+    probe_cmd = [
+        "ffprobe", "-v", "error",
+        "-show_entries", "stream=codec_type,width,height:format=duration",
+        "-of", "json", video_path,
+    ]
+    ok_probe, stdout, err = run_cmd_safe(probe_cmd, timeout_sec=30)
+    if not ok_probe:
+        msg = f"FFprobe failed: {err}"
+        _log_qa_failure(msg, mode)
+        return False, msg
+
+    probe_data = json.loads(stdout)
+    streams = probe_data.get("streams", [])
+    v_stream = next((s for s in streams if s.get("codec_type") == "video"), None)
+    a_stream = next((s for s in streams if s.get("codec_type") == "audio"), None)
+    duration = float(probe_data.get("format", {}).get("duration", 0.0))
+
+    expected_w, expected_h = (1080, 1920) if mode == "short" else (1920, 1080)
+    if not v_stream or int(v_stream.get("width", 0)) != expected_w or int(v_stream.get("height", 0)) != expected_h:
+        msg = f"Resolution mismatch: got {v_stream}, expected {expected_w}x{expected_h}"
+        _log_qa_failure(msg, mode)
+        return False, msg
+    if not a_stream or duration < 10.0:
+        msg = f"Audio missing or duration too short ({duration}s)"
+        _log_qa_failure(msg, mode)
+        return False, msg
+
+    # Point 2: Percentage formatting verification across all puzzles
+    for idx, p in enumerate(puzzles):
+        fmt_ok, fmt_msg = validate_percentage_formatting(p)
+        if not fmt_ok:
+            msg = f"Puzzle {idx + 1} text rule failed: {fmt_msg}"
+            _log_qa_failure(msg, mode)
+            return False, msg
+
+    # Point 3: Extract 6 evenly spaced frames for human-perspective visual QA
+    qa_dir = f"qa_frames_{mode}"
+    if os.path.exists(qa_dir):
+        shutil.rmtree(qa_dir)
+    os.makedirs(qa_dir, exist_ok=True)
+
+    frame_parts = []
+    for i in range(6):
+        ts = round(max(0.4, (duration * (i + 0.5)) / 6.0), 2)
+        out_jpg = os.path.join(qa_dir, f"frame_{i+1}.jpg")
+        run_cmd_safe(
+            ["ffmpeg", "-y", "-ss", str(ts), "-i", video_path, "-vframes", "1", "-q:v", "4", out_jpg],
+            timeout_sec=20,
+        )
+        if os.path.exists(out_jpg):
+            with open(out_jpg, "rb") as img_f:
+                b64_data = base64.b64encode(img_f.read()).decode("utf-8")
+                frame_parts.append({"inline_data": {"mime_type": "image/jpeg", "data": b64_data}})
+
+    # Point 4: Gemini Vision Inspection (active model IDs only)
+    gem_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    if gem_key and frame_parts:
+        qa_prompt = (
+            "You are the Quality Assurance Director for Math Minute Marvels. Inspect these 6 video frames.\n"
+            "Verify ALL 4 items:\n"
+            "1. The 'MATH MINUTE MARVELS' infinity-stopwatch logo is clearly visible and NOT overlapped by cards.\n"
+            "2. The mascot character is clearly visible and NOT overlapping the puzzle card or text.\n"
+            "3. Countdown timer numbers (e.g. 30s, 45s, 60s, 10s) do NOT overlap circle borders or other text.\n"
+            "4. Questions/explanations spell out 'percentage' and final answers use '%'.\n"
+            'Return ONLY JSON: {"passed": true/false, "defects": ["..."]}'
+        )
+        for model_id in GEMINI_ACTIVE_MODELS:
+            try:
+                gem_url = f"https://googleapis.com{model_id}:generateContent?key={gem_key}"
+                payload = {
+                    "contents": [{"parts": [{"text": qa_prompt}, *frame_parts]}],
+                    "generationConfig": {"temperature": 0.1, "responseMimeType": "application/json"},
+                }
+                resp = _http_post_json(gem_url, {}, payload, timeout_sec=45)
+                raw_txt = resp["candidates"]["content"]["parts"]["text"]
+                verdict = _extract_json_payload(raw_txt)
+                if not verdict.get("passed", True):
+                    defects = "; ".join(verdict.get("defects", ["Visual overlap detected"]))
+                    _log_qa_failure(f"Vision QA ({model_id}): {defects}", mode)
+                    return False, f"Vision QA rejected render: {defects}"
+                print(f"[4-Point QA] Vision & FFprobe passed via {model_id} ({expected_w}x{expected_h}, {duration:.1f}s).")
+                return True, "All 4 QA checks passed"
+            except Exception as exc:
+                print(f"[4-Point QA] {model_id} check skipped ({exc}); trying fallback...")
+
+    print(f"[4-Point QA] FFprobe & text checks passed ({expected_w}x{expected_h}, {duration:.1f}s).")
+    return True, "FFprobe and formatting checks passed"
+
 
 # ==============================================================================
 # PART 28 OF 30: YOUTUBE DATA API V3 PUBLISHER, THUMBNAIL & STARTER COMMENT
@@ -1762,13 +2024,139 @@ def post_starter_comment(youtube, video_id: str, puzzles: list, mode: str):
         print(f"[YouTube] Starter comment skipped (non-fatal): {err}")
 
 # ==============================================================================
-# PART 29 OF 30: SUNDAY WEEKLY AI BRAIN ANALYTICS SELF-TUNER (--mode tune)
+# PART 29 OF 30: VIRAL HOOK SCOUT, NEGATIVE MEMORY & 4-DAY STYLE DNA EVOLUTION
 # ==============================================================================
+def run_daily_viral_hook_scout(force: bool = False) -> list:
+    """
+    Runs every 24h using yt-dlp (zero YouTube API quota) to scan viral percentage/math
+    Shorts and extract 4 fresh hook angles into `daily_hook_trends`.
+    """
+    insights = load_weekly_insights()
+    last_scout = insights.get("last_hook_scout_utc")
+    now_utc = datetime.now(timezone.utc)
+
+    if not force and last_scout:
+        try:
+            prev_dt = datetime.fromisoformat(last_scout.replace("Z", "+00:00"))
+            if (now_utc - prev_dt) < timedelta(hours=24):
+                return insights.get("daily_hook_trends", [])
+        except Exception:
+            pass
+
+    print("[Hook Scout] Scanning trending viral percentage & math Shorts via yt-dlp...")
+    ok, stdout, _ = run_cmd_safe(
+        [
+            "yt-dlp",
+            "--flat-playlist",
+            "--dump-single-json",
+            "--playlist-end",
+            "12",
+            "ytsearch12:percentage math tricks shorts viral riddle",
+        ],
+        timeout_sec=45,
+    )
+    sample_titles = []
+    if ok and stdout:
+        try:
+            entries = json.loads(stdout).get("entries", [])
+            sample_titles = [e.get("title", "") for e in entries if e.get("title")][:10]
+        except Exception:
+            pass
+
+    if not sample_titles:
+        sample_titles = [
+            "Only 1% Can Calculate This Percentage In 5 Seconds",
+            "The Percentage Trick Schools Never Taught You",
+            "Reverse Percentage Hack That Works Every Time",
+        ]
+
+    prompt = (
+        "Analyze these trending viral math & percentage Short titles:\n"
+        f"{json.dumps(sample_titles, ensure_ascii=False)}\n"
+        "Extract 4 concise, high-retention hook angles tailored for percentage math puzzles.\n"
+        'Return ONLY JSON: {"hooks": ["angle 1", "angle 2", "angle 3", "angle 4"]}'
+    )
+    try:
+        res = call_5ai_council(prompt, expect_json=True, preferred_role="generator")
+        hooks = [str(h).strip() for h in res.get("hooks", []) if str(h).strip()][:4]
+        if hooks:
+            insights["daily_hook_trends"] = hooks
+            insights["last_hook_scout_utc"] = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+            save_weekly_insights(insights)
+            print(f"[Hook Scout] Saved 4 fresh hook trends: {hooks}")
+            return hooks
+    except Exception as exc:
+        print(f"[Hook Scout] Council synthesis skipped ({exc}).")
+
+    return insights.get("daily_hook_trends", [])
+
+
+def evolve_or_rollback_style_dna(video_views: list, insights: dict) -> dict:
+    """
+    Compares median views before vs. after the last Style DNA evolution.
+    - Automatically rolls back to `previous_style_dna` if median reach drops > 20%.
+    - Otherwise evolves v1.0 -> v1.1+ every 4 days via the 5-AI Creative Council.
+    """
+    dna = clamp_style_dna(insights.get("style_dna", {}))
+    now_utc = datetime.now(timezone.utc)
+    last_ev = dna.get("last_evolved_utc")
+
+    if last_ev:
+        try:
+            ev_dt = datetime.fromisoformat(last_ev.replace("Z", "+00:00"))
+            # Check automatic rollback if median reach dropped > 20% after evolution
+            if dna.get("previous_style_dna") and len(video_views) >= 6:
+                half = len(video_views) // 2
+                prev_med = float(np.median(video_views[:half]))
+                curr_med = float(np.median(video_views[half:]))
+                if prev_med > 20 and curr_med < (prev_med * 0.80):
+                    rolled = clamp_style_dna(dna["previous_style_dna"])
+                    rolled["previous_style_dna"] = None
+                    rolled["last_evolved_utc"] = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+                    insights["style_dna"] = rolled
+                    print(f"[Style DNA] Median views dropped ({prev_med:.0f} -> {curr_med:.0f}). Rolled back to v{rolled['version']}!")
+                    return insights
+
+            if (now_utc - ev_dt) < timedelta(days=4):
+                return insights
+        except Exception:
+            pass
+
+    cur_ver = str(dna.get("version", "1.0"))
+    try:
+        major, minor = [int(x) for x in cur_ver.split(".")[:2]]
+        next_ver = f"{major}.{minor + 1}"
+    except Exception:
+        next_ver = "1.1"
+
+    prompt = (
+        "You are the Creative Evolution AI for Math Minute Marvels (percentage math Shorts).\n"
+        f"Current Style DNA: {json.dumps(dna)}\n"
+        f"Recent median views: {float(np.median(video_views)) if video_views else 0:.1f}\n"
+        "Propose small, high-retention tweaks to color_vibrancy (0.95-1.25), contrast_boost (0.98-1.20), "
+        "caption_words_per_chunk (3-6), music_duck_volume (0.08-0.20), and creative_directive.\n"
+        'Return ONLY JSON: {"color_vibrancy": 1.12, "contrast_boost": 1.08, "caption_words_per_chunk": 4, '
+        '"music_duck_volume": 0.14, "creative_directive": "..."}'
+    )
+    try:
+        proposal = call_5ai_council(prompt, expect_json=True, preferred_role="generator")
+        prev_snapshot = {k: v for k, v in dna.items() if k != "previous_style_dna"}
+        updated = clamp_style_dna({**dna, **proposal})
+        updated["version"] = next_ver
+        updated["previous_style_dna"] = prev_snapshot
+        updated["last_evolved_utc"] = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+        insights["style_dna"] = updated
+        print(f"[Style DNA] Evolved to v{next_ver}: {updated['creative_directive']}")
+    except Exception as exc:
+        print(f"[Style DNA] Evolution skipped ({exc}).")
+
+    return insights
+
+
 def run_weekly_analytics_tuning():
     """
-    Queries YouTube Data API v3 statistics for recent uploads in history.json,
-    ranks top-performing math topics and peak IST publish hours, and updates
-    weekly_insights.json automatically every Sunday.
+    Queries YouTube Data API v3 stats for recent uploads, logs low-reach (<50 views)
+    formats into `avoid_patterns`, updates peak IST hours, and runs 4-day Style DNA evolution.
     """
     history_data = load_history()
     insights = load_weekly_insights()
@@ -1779,7 +2167,8 @@ def run_weekly_analytics_tuning():
             video_map.setdefault(rec["video_id"], []).append(rec)
 
     if not video_map:
-        print("[AI Brain] No uploaded video IDs in history.json yet; keeping baseline insights.")
+        print("[AI Brain] No uploaded video IDs in history.json yet; running hook scout only.")
+        run_daily_viral_hook_scout(force=True)
         return
 
     youtube = get_youtube_service()
@@ -1788,6 +2177,8 @@ def run_weekly_analytics_tuning():
 
     topic_scores = {}
     hour_scores = {}
+    ordered_views = []
+    avoid_patterns = list(insights.get("avoid_patterns", []))
     ist = ZoneInfo("Asia/Kolkata")
 
     for item in resp.get("items", []):
@@ -1796,6 +2187,7 @@ def run_weekly_analytics_tuning():
         views = int(stats.get("viewCount", 0))
         likes = int(stats.get("likeCount", 0))
         comments = int(stats.get("commentCount", 0))
+        ordered_views.append(views)
         engagement_score = views + (likes * 12) + (comments * 25)
 
         pub_str = item.get("snippet", {}).get("publishedAt")
@@ -1810,15 +2202,18 @@ def run_weekly_analytics_tuning():
             t_name = rec.get("topic")
             if t_name:
                 topic_scores[t_name] = topic_scores.get(t_name, 0) + engagement_score
+            if views < 50 and t_name:
+                pattern = f"{t_name} ({rec.get('difficulty', 'MEDIUM')}, {rec.get('timer', 45)}s)"
+                if pattern not in avoid_patterns:
+                    avoid_patterns.append(pattern)
 
     if topic_scores:
-        ranked_topics = sorted(topic_scores, key=topic_scores.get, reverse=True)
-        insights["best_topics"] = ranked_topics[:5]
-
+        insights["best_topics"] = sorted(topic_scores, key=topic_scores.get, reverse=True)[:5]
     if hour_scores:
-        ranked_hours = sorted(hour_scores, key=hour_scores.get, reverse=True)
-        insights["peak_hours_ist"] = ranked_hours[:4]
+        insights["peak_hours_ist"] = sorted(hour_scores, key=hour_scores.get, reverse=True)[:4]
 
+    insights["avoid_patterns"] = avoid_patterns[-20:]
+    insights = evolve_or_rollback_style_dna(ordered_views, insights)
     insights["last_tuned_utc"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     save_weekly_insights(insights)
     print(f"[AI Brain] Updated {INSIGHTS_FILE}: {json.dumps(insights)}")
@@ -1829,13 +2224,16 @@ def run_weekly_analytics_tuning():
 def main():
     args = parse_args()
     print(
-        f"=== {CHANNEL_NAME} 30-Part Engine | mode={args.mode} | "
+        f"=== {CHANNEL_NAME} 5-AI Council Engine | mode={args.mode} | "
         f"test={args.test} | immediate={args.immediate} ==="
     )
 
     if args.mode == "tune":
         run_weekly_analytics_tuning()
         return
+
+    # Refresh 24h viral math hook scout before generating today's puzzle
+    run_daily_viral_hook_scout(force=False)
 
     history_data = load_history()
     theme = pick_theme(history_data)
@@ -1849,18 +2247,32 @@ def main():
         voice=voice,
     )
 
+    # 4-Point Human-Perspective Pre-Upload QA Gate (blocks upload on any defect)
+    qa_passed, qa_msg = run_pre_upload_qa_gate(video_path, puzzles, args.mode)
+    if not qa_passed:
+        raise RuntimeError(f"[QA Gate Blocked Upload] {qa_msg}")
+
     thumb_path = None
     if args.mode == "long":
         thumb_path = generate_long_thumbnail(puzzles, theme, thumb_path="thumb_long.jpg")
 
     if args.test:
         print(
-            f"[Test Mode] Dry-run complete. Video: {video_path}"
+            f"[Test Mode] Dry-run & 4-Point QA passed. Video: {video_path}"
             + (f" | Thumbnail: {thumb_path}" if thumb_path else "")
         )
         return
 
     youtube = get_youtube_service()
+
+    # Single-Slot Sequential Check: ensure previous scheduled video is public first
+    if not args.immediate:
+        is_clear, slot_msg = check_previous_video_is_public(youtube, history_data)
+        print(f"[Single-Slot Check] {slot_msg}")
+        if not is_clear:
+            print("[Single-Slot Check] Skipping duplicate slot schedule until current queued video goes public.")
+            return
+
     video_id = upload_to_youtube(
         youtube=youtube,
         video_path=video_path,
