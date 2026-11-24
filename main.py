@@ -628,6 +628,8 @@ STRICT PERCENTAGE & FORMATTING RULES:
    - "explanation": 2 to 3 short equation-style steps using the full word "percentage" (zero '%' signs, never leave "?" inside steps)
    - "outro": string (ONLY populated for the final puzzle; "" for earlier puzzles)
 5. NEVER repeat any of these recent questions:
+6. Keep "question" concise (under 115 characters) so it fits cleanly in 3 to 4 lines, and end "outro" with a clear call to Subscribe to Math Minute Marvels.
+
 {json.dumps(list(past_questions)[-40:], ensure_ascii=False)}
 """
 
@@ -703,8 +705,8 @@ def clean_math_for_tts(text: str) -> str:
     s = str(text)
     s = re.sub(r"=\s*\[?\s*\?\s*\]?", " equals what?", s)
     s = re.sub(r"\[?\s*\?\s*\]?", "", s)
-    s = re.sub(r"(\d+(?:\.\d+)?)\s*%", r"\1 percent", s)
-    s = s.replace("%", " percent ")
+    s = re.sub(r"(\d+(?:\.\d+)?)\s*%", r"\1 percentage", s)
+    s = s.replace("%", " percentage ")
     s = s.replace("²", " squared").replace("³", " cubed")
     s = re.sub(r"√\s*\(([^)]+)\)", r"square root of \1", s)
     s = re.sub(r"√\s*(\d+(?:\.\d+)?)", r"square root of \1", s)
@@ -966,8 +968,8 @@ def build_ass_subtitles_file(
     """
     play_res_x = 1080 if mode == "short" else 1920
     play_res_y = 1920 if mode == "short" else 1080
-    font_size = 54 if mode == "short" else 46
-    margin_v = 250 if mode == "short" else 55
+    font_size = 48 if mode == "short" else 46
+    margin_v = 115 if mode == "short" else 55
 
     dna = load_weekly_insights().get("style_dna", {})
     chunk_size = max(3, min(7, int(dna.get("caption_words_per_chunk", 5))))
@@ -1039,23 +1041,21 @@ def get_canvas_spec(mode: str) -> dict:
             "width": 1080,
             "height": 1920,
             "pad": 56,
-            # Top logo ends at y=555 -> header & tall card fill y=575..1345
-            "header_box": (56, 575, 1024, 642),
-            "card_box": (56, 658, 1024, 1345),
-            # Large mascot fills lower canvas y=1360..1865 cleanly
+            "header_box": (56, 570, 1024, 636),
+            "card_box": (56, 652, 1024, 1375),
             "mascot_cx": 540,
-            "mascot_cy": 1595,
-            "handle_y": 1842,
-            "mascot_size": 520,
-            "font_badge": load_font(33),
-            "font_hook": load_font(54),
-            "font_question": load_font(70),
-            "font_timer": load_font(86),
-            "font_answer": load_font(76),
-            "font_step": load_font(35),
-            "font_outro": load_font(28),
+            "mascot_cy": 1615,
+            "handle_y": 1855,
+            "mascot_size": 430,
+            "font_badge": load_font(32),
+            "font_hook": load_font(50),
+            "font_question": load_font(52),
+            "font_timer": load_font(78),
+            "font_answer": load_font(64),
+            "font_step": load_font(32),
+            "font_outro": load_font(25),
             "font_symbol_bg": load_font(62),
-            "font_symbol_orbit": load_font(48),
+            "font_symbol_orbit": load_font(44),
         }
     return {
         "width": 1920,
@@ -1388,13 +1388,14 @@ def render_puzzle_frame(
         draw_centered_multiline(draw, puzzle["hook"], spec["font_hook"], card_cx, mid_y - 75, inner_w, theme["text"])
         draw_centered_multiline(draw, "%   +   =   ×   ÷   !", spec["font_hook"], card_cx, card_bottom - 110, inner_w, theme["accent"])
     else:
-        # Question box
+        # Question box sized cleanly for 52px font so plenty of room remains below
         q_lines = wrap_lines(draw, puzzle["question"], spec["font_question"], inner_w - 36)
-        q_box_h = max(120, len(q_lines) * 74 + 40)
-        q_box_top = card_top + 22
+        q_line_h = 58 if mode == "short" else 64
+        q_box_h = max(105, len(q_lines) * q_line_h + 32)
+        q_box_top = card_top + 20
         q_box_bottom = q_box_top + q_box_h
         draw_rounded_card(canvas, (cx0 + 24, q_box_top, cx1 - 24, q_box_bottom), radius=22, fill=theme["bg"], outline=theme["muted"], width=2)
-        draw_centered_multiline(draw, puzzle["question"], spec["font_question"], card_cx, q_box_top + 20, inner_w - 36, theme["text"])
+        draw_centered_multiline(draw, puzzle["question"], spec["font_question"], card_cx, q_box_top + 16, inner_w - 36, theme["text"], line_spacing=8)
 
         if stage == "countdown":
             rem = max(0.0, timeline["timer_end"] - t_sec)
@@ -1404,13 +1405,14 @@ def render_puzzle_frame(
             ring_color = theme["highlight"] if urgent else theme["accent"]
             timer_style = audio_info.get("timer_style", "ring")
 
-            area_cy = (q_box_bottom + card_bottom - 18) // 2
+            avail_h = max(160, (card_bottom - 18) - (q_box_bottom + 14))
+            area_cy = (q_box_bottom + card_bottom - 12) // 2
             if timer_style == "ring":
-                ring_r = 152 if mode == "short" else 135
-                pulse_r = ring_r + (int(abs(math.sin(t_sec * 6.0)) * 8) if urgent else 0)
+                ring_r = min(132 if mode == "short" else 135, max(82, (avail_h // 2) - 18))
+                pulse_r = ring_r + (int(abs(math.sin(t_sec * 6.0)) * 6) if urgent else 0)
                 bbox = (card_cx - pulse_r, area_cy - pulse_r, card_cx + pulse_r, area_cy + pulse_r)
-                draw.ellipse(bbox, outline=theme["bg"], width=15)
-                draw.arc(bbox, start=-90, end=-90 + int(360 * ratio), fill=ring_color, width=15)
+                draw.ellipse(bbox, outline=theme["bg"], width=14)
+                draw.arc(bbox, start=-90, end=-90 + int(360 * ratio), fill=ring_color, width=14)
                 draw.text(
                     (card_cx, area_cy),
                     f"{int(math.ceil(rem))}s",
@@ -1420,19 +1422,19 @@ def render_puzzle_frame(
                 )
             else:
                 draw.text(
-                    (card_cx, area_cy - 38),
+                    (card_cx, area_cy - 34),
                     f"{int(math.ceil(rem))}s",
                     font=spec["font_timer"],
                     fill=ring_color,
                     anchor="mm",
                 )
-                draw_countdown_bar(draw, card_cx, area_cy + 30, int(inner_w * 0.84), 30, rem, total_t, theme)
+                draw_countdown_bar(draw, card_cx, area_cy + 28, int(inner_w * 0.84), 28, rem, total_t, theme)
 
         elif stage in ("reveal", "outro"):
-            ans_top = q_box_bottom + 18
-            ans_bottom = ans_top + (98 if mode == "short" else 90)
+            ans_top = q_box_bottom + 14
+            ans_bottom = ans_top + (82 if mode == "short" else 86)
             draw_rounded_card(canvas, (cx0 + 24, ans_top, cx1 - 24, ans_bottom), radius=20, fill=theme["bg"], outline=theme["accent"], width=3)
-            draw_centered_multiline(draw, f"ANSWER: {puzzle['answer']}", spec["font_answer"], card_cx, ans_top + 14, inner_w - 36, theme["accent"])
+            draw_centered_multiline(draw, f"ANSWER: {puzzle['answer']}", spec["font_answer"], card_cx, ans_top + 10, inner_w - 36, theme["accent"])
 
             steps = _split_explanation_steps(puzzle["explanation"])
             exp_dur = max(0.5, audio_info["explanation_dur"])
@@ -1440,13 +1442,13 @@ def render_puzzle_frame(
             visible_count = len(steps) if stage == "outro" else min(len(steps), int(exp_progress * len(steps)) + 1)
 
             step_font = spec["font_step"]
-            step_y = ans_bottom + 16
-            outro_reserve = 112 if (stage == "outro" and puzzle.get("outro")) else 16
+            step_y = ans_bottom + 12
+            outro_reserve = 96 if (stage == "outro" and puzzle.get("outro")) else 14
 
             for s_idx in range(visible_count):
                 step_label = f"Step {s_idx + 1}: {steps[s_idx]}"
                 wrapped = wrap_lines(draw, step_label, step_font, inner_w - 48)
-                dyn_box_h = len(wrapped) * 42 + 28
+                dyn_box_h = len(wrapped) * 38 + 20
                 if step_y + dyn_box_h > card_bottom - outro_reserve:
                     break
 
@@ -1456,14 +1458,14 @@ def render_puzzle_frame(
                 step_text_col = theme["highlight"] if is_active else theme["text"]
 
                 draw_rounded_card(canvas, (cx0 + 24, step_y, cx1 - 24, step_y + dyn_box_h), radius=16, fill=step_bg, outline=step_border, width=2)
-                draw_centered_multiline(draw, step_label, step_font, card_cx, step_y + 13, inner_w - 48, step_text_col, line_spacing=8)
-                step_y += dyn_box_h + 12
+                draw_centered_multiline(draw, step_label, step_font, card_cx, step_y + 10, inner_w - 48, step_text_col, line_spacing=6)
+                step_y += dyn_box_h + 10
 
             if stage == "outro" and puzzle.get("outro"):
-                box_top = card_bottom - 102
-                box_bot = card_bottom - 16
+                box_top = card_bottom - 88
+                box_bot = card_bottom - 14
                 draw_rounded_card(canvas, (cx0 + 24, box_top, cx1 - 24, box_bot), radius=18, fill=theme["bg"], outline=theme["accent"], width=2)
-                draw_centered_multiline(draw, puzzle["outro"], spec["font_outro"], card_cx, box_top + 14, inner_w - 56, fill=theme["gold"])
+                draw_centered_multiline(draw, puzzle["outro"], spec["font_outro"], card_cx, box_top + 12, inner_w - 56, fill=theme["gold"], line_spacing=6)
 
     # Mascot & channel handle placed in dedicated safe zone (bottom in Short, left column in Long)
     paste_mascot_with_symbols(
@@ -1972,6 +1974,7 @@ def run_pre_upload_qa_gate(video_path: str, puzzles: list, mode: str) -> tuple:
             "2. The mascot character is clearly visible and NOT overlapping the puzzle card or text.\n"
             "3. Countdown timer numbers (e.g. 30s, 45s, 60s, 10s) do NOT overlap circle borders or other text.\n"
             "4. Questions/explanations spell out 'percentage' and final answers use '%'.\n"
+            "5. The 'ANSWER:' box and explanation steps stay strictly inside the card above the mascot with zero overlap.\n"            
             'Return ONLY JSON: {"passed": true/false, "defects": ["..."]}'
         )
         for model_id in GEMINI_ACTIVE_MODELS:
