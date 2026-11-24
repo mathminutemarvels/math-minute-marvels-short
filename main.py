@@ -1773,10 +1773,11 @@ def render_complete_video(puzzles: list, mode: str, theme: dict, voice: str) -> 
         global_offset += timeline["total_dur"]
 
     final_video = (
-        segment_clips
+        next(iter(segment_clips))
         if len(segment_clips) == 1
         else concatenate_videoclips(segment_clips, method="compose")
     )
+
 
     raw_mp4 = os.path.join(work_dir, f"raw_{mode}.mp4")
     output_mp4 = "short.mp4" if mode == "short" else "long_video.mp4"
