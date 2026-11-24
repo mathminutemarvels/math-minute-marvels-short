@@ -105,5 +105,16 @@
     "mode": "short",
     "created_at_utc": "2026-11-24T08:42:56Z",
     "video_id": "XNKSDkwwkk4"
+  },
+  {
+    "question": "3, 7, 15, 31, 63, [ ? ]",
+    "topic": "Number Sequence & Pattern Logic",
+    "difficulty": "HARD",
+    "timer": 24,
+    "theme": "Emerald Coral",
+    "voice": "en-GB-RyanNeural",
+    "mode": "short",
+    "created_at_utc": "2026-11-24T14:37:05Z",
+    "video_id": "Or_OQ8yqve4"
   }
 ]
