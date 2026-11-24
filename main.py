@@ -530,7 +530,7 @@ def call_5ai_council(prompt: str, expect_json: bool = True, preferred_role: str 
             print(f"[5-AI Council] Querying {label}...")
             if kind in ("groq", "openrouter"):
                 base_url = (
-                    "https://" + "://groq.com"
+                    "https://" + "groq.com"
                     if kind == "groq"
                     else "https://" + "openrouter.ai/api/v1/chat/completions"
                 )
@@ -546,7 +546,7 @@ def call_5ai_council(prompt: str, expect_json: bool = True, preferred_role: str 
 
             elif kind == "cloudflare":
                 acct_id, tok = cred
-                cf_url = "https://" + f"://cloudflare.com{acct_id}/ai/run/{model_id}"
+                cf_url = "https://" + f"cloudflare.com{acct_id}/ai/run/{model_id}"
                 data = _http_post_json(
                     cf_url,
                     {"Authorization": f"Bearer {tok}"},
@@ -555,7 +555,7 @@ def call_5ai_council(prompt: str, expect_json: bool = True, preferred_role: str 
                 text_out = data["result"]["response"]
 
             else:
-                gem_url = "https://" + f"://googleapis.com{model_id}:generateContent?key={cred}"
+                gem_url = "https://" + f"googleapis.com{model_id}:generateContent?key={cred}"
                 gen_cfg = {"temperature": 0.75}
                 if expect_json:
                     gen_cfg["responseMimeType"] = "application/json"
@@ -1975,7 +1975,7 @@ def run_pre_upload_qa_gate(video_path: str, puzzles: list, mode: str) -> tuple:
         )
         for model_id in GEMINI_ACTIVE_MODELS:
             try:
-                gem_url = "https://" + f"://googleapis.com{model_id}:generateContent?key={gem_key}"
+                gem_url = "https://" + f":googleapis.com{model_id}:generateContent?key={gem_key}"
                 payload = {
                     "contents": [{"parts": [{"text": qa_prompt}, *frame_parts]}],
                     "generationConfig": {"temperature": 0.1, "responseMimeType": "application/json"},
