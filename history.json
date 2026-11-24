@@ -94,5 +94,16 @@
     "mode": "short",
     "created_at_utc": "2026-11-24T02:32:22Z",
     "video_id": "-slOHFV6kyk"
+  },
+  {
+    "question": "3/7 of 28 + 5/8 of 40 = ?",
+    "topic": "Fraction & Ratio Tricks",
+    "difficulty": "MEDIUM",
+    "timer": 25,
+    "theme": "Solar Sky",
+    "voice": "en-US-GuyNeural",
+    "mode": "short",
+    "created_at_utc": "2026-11-24T08:42:56Z",
+    "video_id": "XNKSDkwwkk4"
   }
 ]
