@@ -152,5 +152,65 @@
     "mode": "short",
     "created_at_utc": "2026-11-25T08:48:36Z",
     "video_id": "_h0W5OVCO9M"
+  },
+  {
+    "question": "A café sells 250 drinks daily; 50 are lattes. What percentage of sales are lattes?",
+    "topic": "Mental Percentage of Quantity",
+    "difficulty": "EASY",
+    "timer": 30,
+    "timer_style": "ring",
+    "theme": "Emerald Coral",
+    "voice": "en-GB-RyanNeural",
+    "mode": "long",
+    "created_at_utc": "2026-11-25T13:50:07Z",
+    "video_id": "5W4xJzSWsfE"
+  },
+  {
+    "question": "A $200 jacket drops to $150 in a sale. What is the percentage discount?",
+    "topic": "Percentage Increase & Decrease",
+    "difficulty": "EASY",
+    "timer": 30,
+    "timer_style": "bar",
+    "theme": "Emerald Coral",
+    "voice": "en-GB-RyanNeural",
+    "mode": "long",
+    "created_at_utc": "2026-11-25T13:50:16Z",
+    "video_id": "5W4xJzSWsfE"
+  },
+  {
+    "question": "A $400 tablet's price rises by a quarter, then falls by a quarter. What is the net percentage decrease?",
+    "topic": "Tricky Percentage Word Puzzles",
+    "difficulty": "MEDIUM",
+    "timer": 45,
+    "timer_style": "ring",
+    "theme": "Emerald Coral",
+    "voice": "en-GB-RyanNeural",
+    "mode": "long",
+    "created_at_utc": "2026-11-25T13:50:29Z",
+    "video_id": "5W4xJzSWsfE"
+  },
+  {
+    "question": "Store A: $4 for 2L, Store B: $9 for 3L. B's price per liter is what percentage more than A's?",
+    "topic": "Percentage Comparison & Ratio",
+    "difficulty": "MEDIUM",
+    "timer": 45,
+    "timer_style": "bar",
+    "theme": "Emerald Coral",
+    "voice": "en-GB-RyanNeural",
+    "mode": "long",
+    "created_at_utc": "2026-11-25T13:50:38Z",
+    "video_id": "5W4xJzSWsfE"
+  },
+  {
+    "question": "A bike is $250 after a price rise of one quarter. What percentage of the final $250 is the increase?",
+    "topic": "Reverse Percentage & Original Value",
+    "difficulty": "HARD",
+    "timer": 60,
+    "timer_style": "ring",
+    "theme": "Emerald Coral",
+    "voice": "en-GB-RyanNeural",
+    "mode": "long",
+    "created_at_utc": "2026-11-25T13:50:54Z",
+    "video_id": "5W4xJzSWsfE"
   }
 ]
