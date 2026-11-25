@@ -224,5 +224,17 @@
     "mode": "short",
     "created_at_utc": "2026-11-25T14:44:27Z",
     "video_id": "TdDoKMpgw2Q"
+  },
+  {
+    "question": "Bakery sells cake for 30 dollars after 10 percentage discount. Cost was 20 dollars. What is percentage profit on cost?",
+    "topic": "Percentage Profit, Loss & Margin",
+    "difficulty": "MEDIUM",
+    "timer": 45,
+    "timer_style": "ring",
+    "theme": "Electric Violet",
+    "voice": "en-US-AriaNeural",
+    "mode": "short",
+    "created_at_utc": "2026-11-25T20:26:52Z",
+    "video_id": "GDOZMAPHIqs"
   }
 ]
