@@ -128,5 +128,17 @@
     "mode": "short",
     "created_at_utc": "2026-11-24T20:26:21Z",
     "video_id": "L2U3z7vVr5A"
+  },
+  {
+    "question": "A 500 dollar gadget rises 20 percentage, then 25 percentage. Total percentage increase?",
+    "topic": "Compound Percentage Growth",
+    "difficulty": "HARD",
+    "timer": 60,
+    "timer_style": "ring",
+    "theme": "Electric Violet",
+    "voice": "en-US-AriaNeural",
+    "mode": "short",
+    "created_at_utc": "2026-11-25T02:34:58Z",
+    "video_id": "20AMQDdNK80"
   }
 ]
