@@ -260,5 +260,17 @@
     "mode": "short",
     "created_at_utc": "2026-11-26T08:46:23Z",
     "video_id": "wHkLFEpbL8s"
+  },
+  {
+    "question": "A $120 drone gets a 30 percentage discount then a 25 percentage discount off. What final percentage discount?",
+    "topic": "Successive Percentage Discounts",
+    "difficulty": "HARD",
+    "timer": 60,
+    "timer_style": "ring",
+    "theme": "Cyber Cyan",
+    "voice": "en-US-ChristopherNeural",
+    "mode": "short",
+    "created_at_utc": "2026-11-26T14:42:11Z",
+    "video_id": "JTZCoEEXDIk"
   }
 ]
