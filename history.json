@@ -236,5 +236,17 @@
     "mode": "short",
     "created_at_utc": "2026-11-25T20:26:52Z",
     "video_id": "GDOZMAPHIqs"
+  },
+  {
+    "question": "On sale, a pair of sneakers drops from 120 dollars to 108 dollars. What percentage discount is given?",
+    "topic": "Discount Percentage",
+    "difficulty": "EASY",
+    "timer": 30,
+    "timer_style": "ring",
+    "theme": "Solar Sky",
+    "voice": "en-US-GuyNeural",
+    "mode": "short",
+    "created_at_utc": "2026-11-26T02:34:36Z",
+    "video_id": "JyGq4f0J6Mo"
   }
 ]
