@@ -272,5 +272,17 @@
     "mode": "short",
     "created_at_utc": "2026-11-26T14:42:11Z",
     "video_id": "JTZCoEEXDIk"
+  },
+  {
+    "question": "A $40 item costs $32 after a discount. What percentage discount was applied?",
+    "topic": "Tricky Percentage Word Puzzles",
+    "difficulty": "EASY",
+    "timer": 30,
+    "timer_style": "ring",
+    "theme": "Electric Violet",
+    "voice": "en-US-AriaNeural",
+    "mode": "short",
+    "created_at_utc": "2026-11-26T20:29:25Z",
+    "video_id": "wkNMotpGtwU"
   }
 ]
