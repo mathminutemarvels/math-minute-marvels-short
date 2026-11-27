@@ -195,61 +195,75 @@ def save_weekly_insights(insights: dict):
         json.dump(insights, f, indent=2, ensure_ascii=False)
 
 # ==============================================================================
-# PART 4 OF 30: SINGLE-SLOT SEQUENTIAL SCHEDULER (10H MINIMUM SPACING)
+# PART 4 OF 30: LIVE YOUTUBE PLAYLIST SINGLE-SLOT SCHEDULER (MAX 3/DAY)
 # ==============================================================================
-def get_last_scheduled_record(history_data: list) -> dict:
-    """Returns the most recent uploaded record dict from history.json if present."""
-    for rec in reversed(history_data):
-        if isinstance(rec, dict) and rec.get("video_id"):
-            return rec
-    return {}
+def get_live_channel_schedule_state(youtube, max_items: int = 25) -> tuple:
+    """
+    Queries the channel's instant 'uploads' playlist (UU...) via YouTube Data API
+    to return all active future publishAt timestamps and recent video titles.
+    """
+    try:
+        ch_res = youtube.channels().list(part="contentDetails", mine=True).execute()
+        uploads_id = ch_res["items"][0]["contentDetails"]["relatedPlaylists"]["uploads"]
+        pl_res = youtube.playlistItems().list(
+            part="snippet,status",
+            playlistId=uploads_id,
+            maxResults=max_items,
+        ).execute()
+
+        now_utc = datetime.now(timezone.utc)
+        future_slots = []
+        recent_titles = []
+
+        for item in pl_res.get("items", []):
+            title = str(item.get("snippet", {}).get("title", "")).strip()
+            if title:
+                recent_titles.append(title)
+            pub_str = str(item.get("status", {}).get("publishAt", "")).strip()
+            if pub_str:
+                dt = datetime.fromisoformat(pub_str.replace("Z", "+00:00"))
+                if dt > now_utc - timedelta(minutes=10):
+                    future_slots.append(dt)
+
+        future_slots.sort()
+        return future_slots, recent_titles
+    except Exception as exc:
+        print(f"[Scheduler] Live playlist lookup fallback ({exc})")
+        return [], []
 
 
 def check_previous_video_is_public(youtube, history_data: list) -> tuple:
     """
-    Verifies both local scheduled_for timestamps and live YouTube Studio API
-    so two Shorts never stack on the same slot or closer than 10 hours apart.
+    Blocks scheduling if ANY Short is already queued/scheduled on YouTube Studio
+    so only 1 Short sits in the scheduled queue at a time (zero double-slot collisions).
     """
-    last_rec = get_last_scheduled_record(history_data)
-    last_vid = str(last_rec.get("video_id", "")).strip()
-    if not last_vid:
-        return True, "No prior video found; clear to schedule single slot."
-
-    sched_str = str(last_rec.get("scheduled_for", "")).strip()
-    if sched_str and sched_str != "immediate":
-        try:
-            sched_dt = datetime.fromisoformat(sched_str.replace("Z", "+00:00"))
-            if datetime.now(timezone.utc) < sched_dt:
-                return False, f"Previous video {last_vid} is still waiting for scheduled time {sched_str}."
-        except Exception:
-            pass
-
-    try:
-        resp = youtube.videos().list(part="status", id=last_vid).execute()
-        items = resp.get("items", [])
-        if not items:
-            return True, f"Previous video {last_vid} not found; clear to schedule."
-        status = items[0].get("status", {})
-        privacy = status.get("privacyStatus", "public")
-        publish_at = status.get("publishAt", "")
-        if privacy == "public":
-            return True, f"Previous video {last_vid} is already public."
-        return False, f"Previous video {last_vid} is still '{privacy}' (scheduled for {publish_at})."
-    except Exception as exc:
-        return True, f"Studio privacy check skipped ({exc}); local timestamp check passed."
+    future_slots, _ = get_live_channel_schedule_state(youtube)
+    if future_slots:
+        next_ist = future_slots[0].astimezone(ZoneInfo("Asia/Kolkata")).strftime("%Y-%m-%d %I:%M %p IST")
+        return False, f"A scheduled video is already queued on YouTube for {next_ist} ({len(future_slots)} pending)."
+    return True, "No pending scheduled videos on YouTube Studio; clear to schedule."
 
 
-def get_next_publish_at_utc(mode: str, insights: dict = None, history_data: list = None) -> str:
+def get_next_publish_at_utc(mode: str, insights: dict = None, history_data: list = None, youtube=None) -> str:
     """
-    Computes the next IST slot at least 10 hours after the last scheduled/published
-    Short so uploads never pile up on the same time.
+    Computes the next IST slot (max 3 Shorts/day at 08:00, 14:00, 20:00 IST)
+    at least 6 hours after both live YouTube scheduled videos and history.json.
     """
     ist = ZoneInfo("Asia/Kolkata")
     now_ist = datetime.now(ist)
     insights = insights or load_weekly_insights()
     history_data = history_data if history_data is not None else load_history()
 
-    earliest_allowed = now_ist + timedelta(minutes=25)
+    earliest_allowed = now_ist + timedelta(minutes=30)
+    min_gap = timedelta(hours=6) if mode == "short" else timedelta(days=2)
+
+    if youtube is not None:
+        future_slots, _ = get_live_channel_schedule_state(youtube)
+        if future_slots:
+            latest_live_ist = future_slots[-1].astimezone(ist)
+            if latest_live_ist + min_gap > earliest_allowed:
+                earliest_allowed = latest_live_ist + min_gap
+
     for rec in reversed(history_data[-10:]):
         if not isinstance(rec, dict) or rec.get("mode", "short") != mode:
             continue
@@ -257,24 +271,13 @@ def get_next_publish_at_utc(mode: str, insights: dict = None, history_data: list
         if ts_str and ts_str != "immediate":
             try:
                 prev_dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00")).astimezone(ist)
-                min_gap = timedelta(hours=10) if mode == "short" else timedelta(days=2)
                 if prev_dt + min_gap > earliest_allowed:
                     earliest_allowed = prev_dt + min_gap
                 break
             except Exception:
                 pass
 
-    base_slots = list(SHORT_SLOTS_IST if mode == "short" else LONG_SLOTS_IST)
-    peak_hours = [
-        int(h) for h in insights.get("peak_hours_ist", [])
-        if isinstance(h, int) and 0 <= h <= 23
-    ]
-
-    if mode == "short" and peak_hours and random.random() < 0.80:
-        active_slots = sorted(set(base_slots) & set(peak_hours)) or base_slots
-    else:
-        active_slots = base_slots
-
+    active_slots = [8, 14, 20] if mode == "short" else list(LONG_SLOTS_IST)
     candidates = []
     for day_offset in range(0, 5):
         base_date = (earliest_allowed + timedelta(days=day_offset)).date()
@@ -357,17 +360,17 @@ def pick_voice(history_data: list) -> str:
     return chosen
 
 # ==============================================================================
-# PART 6 OF 30: CURRICULUM TREE, TOPIC LOCKOUT & DIFFICULTY ROTATOR
+# PART 6 OF 30: DIVERSE MENTAL-MATH CURRICULUM & ANTI-REPETITION ROTATOR
 # ==============================================================================
 CURRICULUM_TOPICS = [
-    "Percentage Increase & Decrease",
-    "Reverse Percentage & Original Value",
-    "Successive Percentage Discounts",
-    "Mental Percentage of Quantity",
-    "Percentage Profit, Loss & Margin",
-    "Percentage Comparison & Ratio",
-    "Compound Percentage Growth",
-    "Tricky Percentage Word Puzzles",
+    "Speed Mental Multiplication Trick",
+    "Number Sequence & Pattern Puzzle",
+    "Order of Operations (PEMDAS) Trap",
+    "Algebra Age & Balance Riddle",
+    "Visual Geometry & Missing Angle",
+    "Fraction & Ratio Quick Comparison",
+    "Square & Square Root Shortcut",
+    "Percentage Increase & Reverse Trick",
 ]
 
 DIFFICULTY_TIMERS = {
@@ -376,11 +379,12 @@ DIFFICULTY_TIMERS = {
     "HARD": 25,
 }
 
+
 def pick_curriculum_topics(history_data: list, count: int) -> list:
-    """Selects `count` distinct math topics NOT used in the last 6 runs."""
+    """Selects `count` distinct math topics NOT used in the last 7 runs."""
     recent_topics = [
         str(item.get("topic", "")).strip().lower()
-        for item in history_data[-6:]
+        for item in history_data[-7:]
         if isinstance(item, dict) and item.get("topic")
     ]
     fresh = [t for t in CURRICULUM_TOPICS if t.lower() not in recent_topics]
@@ -391,7 +395,6 @@ def pick_curriculum_topics(history_data: list, count: int) -> list:
 
 
 def pick_short_difficulty(history_data: list) -> tuple:
-    """Rotates EASY (15s), MEDIUM (25s), and HARD (35s) randomly without repeating the last run."""
     last_diff = next(
         (
             str(item.get("difficulty", "")).strip().upper()
@@ -2077,7 +2080,7 @@ def upload_to_youtube(
     if immediate:
         status_body["privacyStatus"] = "public"
     else:
-        scheduled_for_str = get_next_publish_at_utc(mode)
+        scheduled_for_str = get_next_publish_at_utc(mode, youtube=youtube)
         status_body["privacyStatus"] = "private"
         status_body["publishAt"] = scheduled_for_str
 
