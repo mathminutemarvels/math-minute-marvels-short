@@ -195,24 +195,34 @@ def save_weekly_insights(insights: dict):
         json.dump(insights, f, indent=2, ensure_ascii=False)
 
 # ==============================================================================
-# PART 4 OF 30: SINGLE-SLOT SEQUENTIAL SCHEDULER (T - 1H COMPILE WINDOW)
+# PART 4 OF 30: SINGLE-SLOT SEQUENTIAL SCHEDULER (10H MINIMUM SPACING)
 # ==============================================================================
-def get_last_scheduled_video_id(history_data: list) -> str:
-    """Returns the most recent uploaded video_id from history.json if present."""
+def get_last_scheduled_record(history_data: list) -> dict:
+    """Returns the most recent uploaded record dict from history.json if present."""
     for rec in reversed(history_data):
         if isinstance(rec, dict) and rec.get("video_id"):
-            return str(rec["video_id"]).strip()
-    return ""
+            return rec
+    return {}
 
 
 def check_previous_video_is_public(youtube, history_data: list) -> tuple:
     """
-    Verifies on live YouTube Studio API that the previous video is already public
-    before scheduling the next single slot (prevents multi-slot queue pileup).
+    Verifies both local scheduled_for timestamps and live YouTube Studio API
+    so two Shorts never stack on the same slot or closer than 10 hours apart.
     """
-    last_vid = get_last_scheduled_video_id(history_data)
+    last_rec = get_last_scheduled_record(history_data)
+    last_vid = str(last_rec.get("video_id", "")).strip()
     if not last_vid:
         return True, "No prior video found; clear to schedule single slot."
+
+    sched_str = str(last_rec.get("scheduled_for", "")).strip()
+    if sched_str and sched_str != "immediate":
+        try:
+            sched_dt = datetime.fromisoformat(sched_str.replace("Z", "+00:00"))
+            if datetime.now(timezone.utc) < sched_dt:
+                return False, f"Previous video {last_vid} is still waiting for scheduled time {sched_str}."
+        except Exception:
+            pass
 
     try:
         resp = youtube.videos().list(part="status", id=last_vid).execute()
@@ -226,17 +236,33 @@ def check_previous_video_is_public(youtube, history_data: list) -> tuple:
             return True, f"Previous video {last_vid} is already public."
         return False, f"Previous video {last_vid} is still '{privacy}' (scheduled for {publish_at})."
     except Exception as exc:
-        return True, f"Studio privacy check skipped ({exc}); proceeding safely."
+        return True, f"Studio privacy check skipped ({exc}); local timestamp check passed."
 
 
-def get_next_publish_at_utc(mode: str, insights: dict = None) -> str:
+def get_next_publish_at_utc(mode: str, insights: dict = None, history_data: list = None) -> str:
     """
-    Computes the single next upcoming IST slot (~1 hour after cron compile trigger),
-    using 80% exploitation of proven peak hours and 20% exploration.
+    Computes the next IST slot at least 10 hours after the last scheduled/published
+    Short so uploads never pile up on the same time.
     """
     ist = ZoneInfo("Asia/Kolkata")
     now_ist = datetime.now(ist)
     insights = insights or load_weekly_insights()
+    history_data = history_data if history_data is not None else load_history()
+
+    earliest_allowed = now_ist + timedelta(minutes=25)
+    for rec in reversed(history_data[-10:]):
+        if not isinstance(rec, dict) or rec.get("mode", "short") != mode:
+            continue
+        ts_str = str(rec.get("scheduled_for") or rec.get("created_at_utc") or "").strip()
+        if ts_str and ts_str != "immediate":
+            try:
+                prev_dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00")).astimezone(ist)
+                min_gap = timedelta(hours=10) if mode == "short" else timedelta(days=2)
+                if prev_dt + min_gap > earliest_allowed:
+                    earliest_allowed = prev_dt + min_gap
+                break
+            except Exception:
+                pass
 
     base_slots = list(SHORT_SLOTS_IST if mode == "short" else LONG_SLOTS_IST)
     peak_hours = [
@@ -250,21 +276,17 @@ def get_next_publish_at_utc(mode: str, insights: dict = None) -> str:
         active_slots = base_slots
 
     candidates = []
-    for day_offset in (0, 1):
-        base_date = (now_ist + timedelta(days=day_offset)).date()
+    for day_offset in range(0, 5):
+        base_date = (earliest_allowed + timedelta(days=day_offset)).date()
         for hour in active_slots:
             slot_dt = datetime(base_date.year, base_date.month, base_date.day, hour, 0, 0, tzinfo=ist)
-            if slot_dt > now_ist + timedelta(minutes=25):
+            if slot_dt >= earliest_allowed:
                 candidates.append(slot_dt)
 
-    if not candidates:
-        fallback_dt = now_ist + timedelta(hours=1)
-        candidates.append(fallback_dt.replace(minute=0, second=0, microsecond=0))
-
-    next_slot_ist = min(candidates)
+    next_slot_ist = min(candidates) if candidates else earliest_allowed.replace(minute=0, second=0, microsecond=0)
     next_slot_utc = next_slot_ist.astimezone(timezone.utc)
     print(
-        f"[Single-Slot Scheduler] Next IST Slot (T+1h): {next_slot_ist.strftime('%Y-%m-%d %I:%M %p IST')} "
+        f"[Single-Slot Scheduler] Next IST Slot: {next_slot_ist.strftime('%Y-%m-%d %I:%M %p IST')} "
         f"-> UTC: {next_slot_utc.strftime('%Y-%m-%dT%H:%M:%SZ')}"
     )
     return next_slot_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -2024,7 +2046,7 @@ def upload_to_youtube(
     mode: str,
     thumb_path: str = None,
     immediate: bool = False,
-) -> str:
+) -> tuple:
     first = puzzles[0]
     first_rec = records[0]
 
@@ -2051,11 +2073,13 @@ def upload_to_youtube(
         tags = ["mental math", "math puzzles", "math tricks", "brain training", "math shortcuts"]
 
     status_body = {"selfDeclaredMadeForKids": False}
+    scheduled_for_str = "immediate"
     if immediate:
         status_body["privacyStatus"] = "public"
     else:
+        scheduled_for_str = get_next_publish_at_utc(mode)
         status_body["privacyStatus"] = "private"
-        status_body["publishAt"] = get_next_publish_at_utc(mode)
+        status_body["publishAt"] = scheduled_for_str
 
     body = {
         "snippet": {
@@ -2076,7 +2100,7 @@ def upload_to_youtube(
         _, response = request.next_chunk()
 
     video_id = response["id"]
-    print(f"[YouTube] Uploaded video ID: {video_id}")
+    print(f"[YouTube] Uploaded video ID: {video_id} (Scheduled: {scheduled_for_str})")
 
     if thumb_path and os.path.exists(thumb_path):
         try:
@@ -2088,7 +2112,7 @@ def upload_to_youtube(
         except Exception as terr:
             print(f"[YouTube] Thumbnail upload skipped (non-fatal): {terr}")
 
-    return video_id
+    return video_id, scheduled_for_str
 
 
 def post_starter_comment(youtube, video_id: str, puzzles: list, mode: str):
@@ -2361,7 +2385,7 @@ def main():
             print("[Single-Slot Check] Skipping duplicate slot schedule until current queued video goes public.")
             return
 
-    video_id = upload_to_youtube(
+    video_id, scheduled_for_str = upload_to_youtube(
         youtube=youtube,
         video_path=video_path,
         puzzles=puzzles,
@@ -2375,6 +2399,7 @@ def main():
 
     for rec in enriched_records:
         rec["video_id"] = video_id
+        rec["scheduled_for"] = scheduled_for_str
     save_history_entries(enriched_records)
     print(f"[Done] Saved {len(enriched_records)} record(s) to {HISTORY_FILE} for {video_id}.")
 
