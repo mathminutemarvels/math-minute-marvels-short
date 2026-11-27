@@ -3,7 +3,12 @@
 # ==============================================================================
 name: MathMinuteMarvels Unified Pipeline
 
+concurrency:
+  group: math-minute-marvels-publish
+  cancel-in-progress: false
+  
 on:
+
   schedule:
     # 4 Daily Shorts (triggers 1 hr before 02:00, 08:00, 14:00, 20:00 IST)
     - cron: "30 19 * * *"
