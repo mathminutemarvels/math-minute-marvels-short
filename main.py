@@ -416,14 +416,12 @@ def normalize_math_expr(raw: str) -> str:
     s = re.sub(r"=\s*\[?\s*\?\s*\]?$", "", s).strip()
     s = s.rstrip("?").strip()
 
-    # Convert "X percentage of Y" or "X% of Y" -> "((X)/100)*(Y)"
     s = re.sub(
         r"(\d+(?:\.\d+)?)\s*(?:percentage|%)\s*of\s*(\d+(?:\.\d+)?)",
         r"((\1)/100)*(\2)",
         s,
         flags=re.IGNORECASE,
     )
-    # Convert standalone "25 percentage" or "25%" -> "(25/100)"
     s = re.sub(r"(\d+(?:\.\d+)?)\s*(?:percentage|%)", r"((\1)/100)", s, flags=re.IGNORECASE)
 
     s = s.replace("×", "*").replace("÷", "/").replace("−", "-").replace("–", "-")
@@ -433,26 +431,34 @@ def normalize_math_expr(raw: str) -> str:
     s = re.sub(r"(\d)\s*([a-zA-Z])", r"\1*\2", s)
     return s.strip()
 
-
+# ==============================================================================
+# PART 8 OF 30: PUZZLE FORMATTING & SYMPY ARITHMETIC VERIFIER
+# ==============================================================================
 def validate_percentage_formatting(puzzle: dict) -> tuple:
-    """Enforces '%' in final answer and full word 'percentage' in question & explanation."""
+    """Enforces '%' in final answer and full word 'percentage' ONLY for percentage puzzles."""
     q_text = str(puzzle.get("question", "")).strip()
     exp_text = str(puzzle.get("explanation", "")).strip()
     ans_text = str(puzzle.get("answer", "")).strip()
+    topic_text = str(puzzle.get("topic", "")).strip().lower()
+
+    is_pct_puzzle = "percentage" in topic_text or "percentage" in q_text.lower() or "%" in ans_text
 
     if "%" in q_text or "%" in exp_text:
         return False, "Forbidden '%' symbol found inside question or explanation (must spell out 'percentage')"
-    if "percentage" not in q_text.lower():
-        return False, "Question must spell out the word 'percentage' in full"
-    if "percentage" not in exp_text.lower():
-        return False, "Explanation must spell out the word 'percentage' in full"
-    if "%" not in ans_text:
-        return False, "Final answer must include the '%' symbol (e.g., '25%')"
-    return True, "Percentage text rules passed"
+
+    if is_pct_puzzle:
+        if "percentage" not in q_text.lower():
+            return False, "Percentage question must spell out the word 'percentage' in full"
+        if "percentage" not in exp_text.lower():
+            return False, "Percentage explanation must spell out the word 'percentage' in full"
+        if "%" not in ans_text:
+            return False, "Percentage final answer must include the '%' symbol (e.g., '25%')"
+
+    return True, "Text formatting rules passed"
 
 
 def verify_puzzle_with_sympy(puzzle: dict) -> tuple:
-    """Verifies percentage text rules first, then checks arithmetic via SymPy."""
+    """Verifies text formatting rules first, then checks pure arithmetic via SymPy."""
     fmt_ok, fmt_msg = validate_percentage_formatting(puzzle)
     if not fmt_ok:
         return False, fmt_msg
@@ -463,10 +469,9 @@ def verify_puzzle_with_sympy(puzzle: dict) -> tuple:
     q_raw = str(puzzle.get("question", "")).strip()
     a_raw = str(puzzle.get("answer", "")).strip()
 
-    # Word problems pass formatting check; pure expressions are verified symbolically
     cleaned_words = re.sub(r"\b(?:percentage|of|is|what)\b", "", q_raw, flags=re.IGNORECASE)
     if len(re.findall(r"[a-zA-Z]{3,}", cleaned_words)) > 0:
-        return True, "Percentage word puzzle; formatting verified"
+        return True, "Word puzzle; formatting verified"
 
     lhs_str = normalize_math_expr(q_raw)
     rhs_str = normalize_math_expr(a_raw)
@@ -555,9 +560,9 @@ def call_5ai_council(prompt: str, expect_json: bool = True, preferred_role: str 
             print(f"[5-AI Council] Querying {label}...")
             if kind in ("groq", "openrouter"):
                 base_url = (
-                    "https://" + "groq.com"
+                    "https://groq.com"
                     if kind == "groq"
-                    else "https://" + "openrouter.ai/api/v1/chat/completions"
+                    else "https://openrouter.ai"
                 )
                 body = {
                     "model": model_id,
@@ -571,7 +576,7 @@ def call_5ai_council(prompt: str, expect_json: bool = True, preferred_role: str 
 
             elif kind == "cloudflare":
                 acct_id, tok = cred
-                cf_url = "https://" + f"cloudflare.com{acct_id}/ai/run/{model_id}"
+                cf_url = f"https://cloudflare.com{acct_id}/ai/run/{model_id}"
                 data = _http_post_json(
                     cf_url,
                     {"Authorization": f"Bearer {tok}"},
@@ -580,7 +585,7 @@ def call_5ai_council(prompt: str, expect_json: bool = True, preferred_role: str 
                 text_out = data["result"]["response"]
 
             else:
-                gem_url = "https://" + f"googleapis.com{model_id}:generateContent?key={cred}"
+                gem_url = f"https://googleapis.com{model_id}:generateContent?key={cred}"
                 gen_cfg = {"temperature": 0.75}
                 if expect_json:
                     gen_cfg["responseMimeType"] = "application/json"
@@ -614,16 +619,16 @@ def build_gemini_prompt(
     hook_trends = insights.get("daily_hook_trends", [])[:4]
     avoid_list = insights.get("avoid_patterns", [])[-8:]
 
-    single_topic = next(iter(assigned_topics), "Percentage Increase & Decrease")
+    single_topic = next(iter(assigned_topics), "Speed Mental Multiplication Trick")
     if mode == "short":
         topic_rule = (
-            f'Create 1 percentage math puzzle strictly from this topic: "{single_topic}". '
+            f'Create 1 mental-math puzzle strictly from this topic: "{single_topic}". '
             f'Include a single energetic opening intro in "hook" starting with "Welcome to Math Minute Marvels!" '
             f'and a single closing CTA in "outro".'
         )
     else:
         topic_rule = (
-            f"Create {count} percentage math puzzles covering these exact {count} topics in order: {json.dumps(assigned_topics)}. "
+            f"Create {count} diverse mental-math puzzles covering these exact {count} topics in order: {json.dumps(assigned_topics)}. "
             f'ONLY Puzzle 1 ("index 0") may have a "hook" starting with "Welcome to Math Minute Marvels!". '
             f'Puzzles 2 through {count} MUST set "hook" to "" (empty string) so there is NO repeated intro. '
             f'ONLY Puzzle {count} (the final puzzle) may have a closing "outro"; Puzzles 1 through {count - 1} MUST set "outro" to "".'
@@ -637,20 +642,20 @@ Creative Style Directive: {directive}
 Trending Viral Hook Angles to Inspire Hook Copy: {json.dumps(hook_trends, ensure_ascii=False)}
 Low-Retention Patterns to AVOID: {json.dumps(avoid_list, ensure_ascii=False)}
 
-STRICT PERCENTAGE & FORMATTING RULES:
+STRICT TOPIC & FORMATTING RULES:
 1. Return ONLY a JSON object with a single key "puzzles" containing an array of exactly {count} object(s).
-2. EVERY puzzle MUST be a percentage math puzzle where the final answer is a percentage.
+2. Strictly follow the assigned topic. Do NOT generate a percentage or discount word problem unless the assigned topic explicitly says "Percentage".
 3. CRITICAL SYMBOL RULE:
-   - In "question" and "explanation": NEVER use the '%' symbol! ALWAYS write out the word "percentage" in full (e.g., "What percentage of 250 is 45?" or "A jacket drops from 80 to 60. What is the percentage discount?").
-   - In "answer": ALWAYS include the '%' symbol (e.g., "18%" or "25%").
+   - In "question" and "explanation": NEVER use the '%' symbol! If a puzzle involves percentages, always spell out the word "percentage" in full.
+   - In "answer": Give the exact crisp final answer (if it is a percentage puzzle, include '%', e.g. "25%"; otherwise give the exact number/expression, e.g. "323" or "45°").
 4. Each object MUST include these exact keys:
    - "hook": string (ONLY populated for Puzzle 1; "" for Puzzles 2..{count})
-   - "question": concise percentage problem using the full word "percentage" (zero '%' signs)
+   - "question": concise math puzzle matching the assigned topic (zero '%' signs)
    - "topic": exact assigned topic name
    - "difficulty": "EASY", "MEDIUM", or "HARD"
-   - "timer_seconds": integer (30 for EASY, 45 for MEDIUM, 60 for HARD)
-   - "answer": exact final percentage with '%' symbol (e.g., "25%")
-   - "explanation": 2 to 3 short equation-style steps using the full word "percentage" (zero '%' signs, never leave "?" inside steps)
+   - "timer_seconds": integer (12 for EASY, 18 for MEDIUM, 25 for HARD)
+   - "answer": exact final answer
+   - "explanation": 2 to 3 short equation-style steps (zero '%' signs, never leave "?" inside steps)
    - "outro": string (ONLY populated for the final puzzle; "" for earlier puzzles)
 5. NEVER repeat any of these recent questions:
 6. Keep "question" concise (under 115 characters) so it fits cleanly in 3 to 4 lines, and end "outro" with a clear call to Subscribe to Math Minute Marvels.
