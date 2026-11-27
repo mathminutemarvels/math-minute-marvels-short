@@ -371,9 +371,9 @@ CURRICULUM_TOPICS = [
 ]
 
 DIFFICULTY_TIMERS = {
-    "EASY": 30,
-    "MEDIUM": 45,
-    "HARD": 60,
+    "EASY": 12,
+    "MEDIUM": 18,
+    "HARD": 25,
 }
 
 def pick_curriculum_topics(history_data: list, count: int) -> list:
@@ -2051,7 +2051,7 @@ def upload_to_youtube(
     first_rec = records[0]
 
     if mode == "short":
-        title = f"{first['question'].replace('= ?', '').strip()} = ?? | {first['topic']} #Shorts"[:98]
+        title = f"99% Fail This {first['difficulty'].title()} {first['topic']} Puzzle! #Shorts"[:98]
         description = (
             f"{first['question']}\n\n"
             f"Topic: {first['topic']} | Difficulty: {first['difficulty']} ({first_rec['timer']}s)\n\n"
@@ -2061,7 +2061,7 @@ def upload_to_youtube(
         tags = ["Shorts", "mental math", "math tricks", first["topic"], "brain teaser", "fast math"]
     else:
         topics_list = ", ".join(dict.fromkeys(p["topic"] for p in puzzles))
-        title = f"5 Mental Math Puzzles That Will Upgrade Your Brain ({topics_list})"[:98]
+        title = f"Can You Beat This 5-Round {puzzles[0]['topic']} Challenge? (Only 1% Score 5/5)"[:98]
         chapters_block = "\n".join(chapters)
         description = (
             "Can you solve all 5 progressive mental math challenges before the timer hits zero?\n\n"
